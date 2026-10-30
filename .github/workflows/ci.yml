@@ -91,7 +91,7 @@ jobs:
               if '[E]' not in line:
                   continue
               start = index
-              while start > 0 and index - start < 45 and not progress.match(
+              while start > 0 and index - start < 120 and not progress.match(
                   lines[start - 1]
               ):
                   start -= 1
@@ -110,6 +110,16 @@ jobs:
                       + block[chunk:chunk + 3500].replace('%', '%25')
                       .replace('\n', '%0A').replace('\r', '%0D')
                   )
+          # Виджет-тест печатает исключение отдельным блоком, и он легко не
+          # попадает в окно вокруг [E]. Хвост лога уходит в аннотации следом,
+          # чтобы в проверке была видна причина, а не только имя теста.
+          tail = '\n'.join(lines[-160:])
+          for chunk in range(0, len(tail), 3500):
+              print(
+                  f'::error title=tests-tail-{chunk // 3500}::'
+                  + tail[chunk:chunk + 3500].replace('%', '%25')
+                  .replace('\n', '%0A').replace('\r', '%0D')
+              )
           PY
           fi
           exit ${status:-0}

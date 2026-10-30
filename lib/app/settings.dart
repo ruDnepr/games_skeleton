@@ -40,9 +40,18 @@ class SettingsController extends ChangeNotifier {
   }
 
   /// Value of one switch of one game, or the default the game declared.
+  ///
+  /// A value that was stored earlier is read from the device even when [load]
+  /// has not seen this game: the key belongs to the game, not to the catalogue.
   bool flag(String gameId, String key) {
-    final stored = _flags[flagKey(gameId, key)];
-    if (stored != null) return stored;
+    final storageKey = flagKey(gameId, key);
+    final known = _flags[storageKey];
+    if (known != null) return known;
+    final stored = _preferences?.getBool(storageKey);
+    if (stored != null) {
+      _flags[storageKey] = stored;
+      return stored;
+    }
     return GameCatalog.defaultFlag(gameId, key);
   }
 

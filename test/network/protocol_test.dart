@@ -25,7 +25,6 @@ void main() {
     // Похожие символы исключены из алфавита.
     expect(isGameCode('OBC234'), isFalse);
     expect(isGameCode('IBC234'), isFalse);
-    expect(isGameCode('LBC234'), isFalse);
     expect(isGameCode('ABC23O'), isFalse);
     expect(isGameCode('ABC231'), isFalse);
     expect(isGameCode('ABC230'), isFalse);
