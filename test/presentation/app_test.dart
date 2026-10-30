@@ -17,8 +17,11 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = SettingsController()..sound = false;
+    final settings = SettingsController();
     addTearDown(settings.dispose);
+    // The app loads its settings before the first frame.
+    await settings.load();
+    settings.sound = false;
     await tester.pumpWidget(
       ProviderScope(
         child: DianaApp(settings: settings, showSplash: splash),
@@ -72,6 +75,11 @@ void main() {
     await tester.tap(find.text('Правила'));
     await tester.pumpAndSettle();
     expect(find.text('Это просто!'), findsOneWidget);
+    expect(find.byKey(const Key('rule-card-1')), findsOneWidget);
+
+    // The last line of the rules sits below the fold of a phone screen.
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pumpAndSettle();
     expect(
       find.text('Ошибаться и пробовать снова — это нормально! ✨'),
       findsOneWidget,

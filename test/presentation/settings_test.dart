@@ -23,8 +23,11 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = SettingsController()..sound = false;
+    final settings = SettingsController();
     addTearDown(settings.dispose);
+    // load() opens the storage; without it a switch would live only in memory.
+    await settings.load();
+    settings.sound = false;
     await tester.pumpWidget(
       MaterialApp(
         home: SettingsPage(
