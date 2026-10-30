@@ -1,0 +1,252 @@
+name: Flutter
+
+# Two jobs only:
+#   * android — анализ, тесты и готовые APK (debug и release) как артефакты;
+#   * ios     — сборка приложения для симулятора без подписи.
+#
+# Тесты на устройстве — шаг внутри задания android. В заготовке ещё нет партии,
+# которую можно пройти, поэтому сценариев для устройства пока нет: скрипт
+# честно сообщает об этом и ничего не запускает. Шаг не блокирует сборку, а
+# включается только вручную через `Run workflow`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Тесты на эмуляторе запускаются только вручную, чтобы один коммит не
+  # поднимал лишние прогоны.
+  workflow_dispatch:
+
+# Новый коммит отменяет предыдущий прогон той же ветки.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.8'
+
+jobs:
+  android:
+    name: "Android: анализ, тесты и APK"
+    runs-on: ubuntu-latest
+    # Анализ, тесты и две сборки занимают около 12 минут; остальное оставлено
+    # на шаг с эмулятором, у которого есть свой предел в 45 минут.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Установить зависимости
+        run: flutter pub get
+
+      - name: Анализ кода
+        shell: bash
+        run: |
+          flutter analyze --no-pub > /tmp/analyze.txt 2>&1 || status=$?
+          cat /tmp/analyze.txt
+          if [ -n "$status" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('/tmp/analyze.txt').read_text()
+          for i in range(0, min(len(text), 35000), 3500):
+              part = (
+                  text[i:i + 3500]
+                  .replace('%', '%25')
+                  .replace('\n', '%0A')
+                  .replace('\r', '%0D')
+              )
+              print(f'::error title=analyzer-output-{i // 3500:02d}::{part}')
+          PY
+          fi
+          exit ${status:-0}
+
+      - name: Тесты
+        shell: bash
+        run: |
+          flutter test --reporter expanded --timeout 120s > /tmp/tests.txt 2>&1 || status=$?
+          cat /tmp/tests.txt
+          if [ -n "$status" ]; then
+            python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          lines = Path('/tmp/tests.txt').read_text().splitlines()
+          # A failing test is marked with [E]. The exception itself is printed a
+          # few lines BEFORE that marker, so the context is taken from both
+          # sides; without it the annotation named the test but not the reason.
+          progress = re.compile(r'^\d{2}:\d{2} ')
+          blocks = []
+          for index, line in enumerate(lines):
+              if '[E]' not in line:
+                  continue
+              start = index
+              while start > 0 and index - start < 120 and not progress.match(
+                  lines[start - 1]
+              ):
+                  start -= 1
+              block = lines[start:index + 1]
+              for following in lines[index + 1:]:
+                  if progress.match(following):
+                      break
+                  block.append(following)
+              blocks.append('\n'.join(block))
+          if not blocks:
+              blocks = ['\n'.join(lines[-60:])]
+          for number, block in enumerate(blocks[:6]):
+              for chunk in range(0, len(block), 3500):
+                  print(
+                      f'::error title=failed-test-{number}-{chunk // 3500}::'
+                      + block[chunk:chunk + 3500].replace('%', '%25')
+                      .replace('\n', '%0A').replace('\r', '%0D')
+                  )
+          PY
+          fi
+          exit ${status:-0}
+
+      - name: Собрать debug APK
+        shell: bash
+        run: |
+          flutter build apk --debug > /tmp/build-debug.txt 2>&1 || status=$?
+          cat /tmp/build-debug.txt
+          if [ -n "$status" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('/tmp/build-debug.txt').read_text()[-3900:]
+          print(
+              '::error title=android-debug-build::'
+              + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+          )
+          PY
+          fi
+          exit ${status:-0}
+
+      # Подписан отладочным ключом, поэтому ставится на телефон без keystore.
+      - name: Собрать release APK
+        shell: bash
+        run: |
+          flutter build apk --release > /tmp/build-release.txt 2>&1 || status=$?
+          cat /tmp/build-release.txt
+          if [ -n "$status" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('/tmp/build-release.txt').read_text()[-3900:]
+          print(
+              '::error title=android-release-build::'
+              + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+          )
+          PY
+          fi
+          exit ${status:-0}
+
+      - name: Проверить, что APK собрались
+        if: always()
+        shell: bash
+        run: |
+          ls -l build/app/outputs/flutter-apk/*.apk || echo 'APK не найдены'
+          test -f build/app/outputs/flutter-apk/app-debug.apk
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Выгрузить APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diana-games-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: warn
+
+      - name: Включить ускорение эмулятора
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Совещательный шаг: когда в integration_test/ появятся сценарии, они
+      # выполнятся здесь. Сейчас сценариев нет, и шаг просто завершается.
+      - name: Тесты на эмуляторе Android
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        # Предел шага больше суммы пределов внутри скрипта (загрузка эмулятора
+        # 10 мин + прогрев 7 мин + сценарии по 3 мин), чтобы зависший эмулятор
+        # давал обычный сбой с логами, а не молчаливое убийство шага.
+        timeout-minutes: 40
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: ./tool/run_integration.sh
+
+      - name: Выгрузить логи устройства
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diana-games-device-logs
+          path: |
+            /tmp/integration.txt
+            /tmp/device.txt
+          if-no-files-found: ignore
+
+  ios:
+    name: "iOS: сборка без подписи"
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Собрать приложение для симулятора
+        shell: bash
+        run: |
+          flutter build ios --simulator --debug --no-codesign > /tmp/build.txt 2>&1 || status=$?
+          cat /tmp/build.txt
+          if [ -n "$status" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('/tmp/build.txt').read_text()[-3900:]
+          print(
+              '::error title=ios-build-output::'
+              + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+          )
+          PY
+          fi
+          exit ${status:-0}
+
+      - name: Упаковать приложение
+        if: always()
+        shell: bash
+        run: |
+          if [ -d build/ios/iphonesimulator/Runner.app ]; then
+            cd build/ios/iphonesimulator && zip -qry "$GITHUB_WORKSPACE/Runner-simulator.zip" Runner.app
+          else
+            echo 'Runner.app не найден'
+          fi
+
+      - name: Выгрузить приложение
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diana-games-ios-simulator
+          path: Runner-simulator.zip
+          if-no-files-found: warn
