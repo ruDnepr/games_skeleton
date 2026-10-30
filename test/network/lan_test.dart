@@ -152,8 +152,14 @@ void main() {
     final error = await refusal.timeout(patience);
     expect(error.data['message'], 'Ход не распознан');
 
-    await waitUntil(() => host.status == NetworkStatus.disconnected);
-    await waitUntil(() => client.status == NetworkStatus.disconnected);
+    await waitUntil(
+      host,
+      () => host.status == NetworkStatus.disconnected,
+    );
+    await waitUntil(
+      client,
+      () => client.status == NetworkStatus.disconnected,
+    );
 
     // The session never saw the move: it was stopped before the game applied it.
     expect(seenByHost.where((event) => event.type == 'move'), isEmpty);

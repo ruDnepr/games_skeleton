@@ -342,12 +342,8 @@ class NetworkGameService extends ChangeNotifier {
           } on FormatException catch (error) {
             // The game does not accept the move, so the two sides would
             // disagree: the session ends here instead of drifting apart.
-            final String? reason = error.message;
-            unawaited(
-              _refuse(
-                reason == null || reason.isEmpty ? 'Ход не распознан' : reason,
-              ),
-            );
+            final reason = error.message;
+            unawaited(_refuse(reason.isEmpty ? 'Ход не распознан' : reason));
             return;
           }
         }
