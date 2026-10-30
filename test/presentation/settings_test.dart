@@ -17,14 +17,13 @@ void main() {
   /// built and can be focused without scrolling.
   Future<SettingsController> pumpSettings(
     WidgetTester tester, {
-    SettingsController? controller,
     bool withGame = false,
   }) async {
     tester.view.physicalSize = const Size(400, 1600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = controller ?? (SettingsController()..sound = false);
+    final settings = SettingsController()..sound = false;
     addTearDown(settings.dispose);
     await tester.pumpWidget(
       MaterialApp(

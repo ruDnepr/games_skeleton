@@ -86,7 +86,6 @@ void main() {
     expect(preferences.getBool('game.other.reminder'), isTrue);
 
     // And both come back after a restart, still separately.
-    settings.dispose();
     final restored = SettingsController();
     addTearDown(restored.dispose);
     await restored.load();

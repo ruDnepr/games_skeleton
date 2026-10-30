@@ -19,6 +19,7 @@ void main() {
     hostName: 'Диана',
     options: {'reminder': true, 'markers': false},
   );
+  const patience = Duration(seconds: 5);
 
   Future<NetworkGameService> startHost() async {
     final host = NetworkGameService();
@@ -32,15 +33,46 @@ void main() {
     return host;
   }
 
-  test('хост и клиент соединяются по адресу, лобби разбирается игрой', () async {
-    final host = await startHost();
+  /// Connects a client by `IP:port` and waits until the lobby arrives.
+  Future<NetworkGameService> connectClient(NetworkGameService host) async {
     final client = NetworkGameService();
+    final configured = client.events.firstWhere(
+      (event) => event.type == 'gameConfig',
+    );
+    await client.connect(
+      '127.0.0.1',
+      host.port!,
+      code: lobby.code,
+      playerName: 'Маша',
+    );
+    await configured.timeout(patience);
+    return client;
+  }
+
+  /// Waits for the next message of [type] on [service].
+  ///
+  /// Messages wake up the stream, not the listeners of the service, so the test
+  /// waits for the event itself and only uses [waitUntil] for the state.
+  Future<NetworkMessage> nextMessage(
+    NetworkGameService service,
+    String type,
+  ) => service.events
+      .firstWhere((message) => message.type == type)
+      .timeout(patience);
+
+  void closeBoth(NetworkGameService host, NetworkGameService client) {
     addTearDown(() async {
       await client.close();
       await host.close();
       client.dispose();
       host.dispose();
     });
+  }
+
+  test('хост и клиент соединяются по адресу, лобби разбирается игрой', () async {
+    final host = await startHost();
+    final client = NetworkGameService();
+    closeBoth(host, client);
 
     final configured = client.events.firstWhere(
       (event) => event.type == 'gameConfig',
@@ -51,7 +83,7 @@ void main() {
       code: lobby.code,
       playerName: 'Маша',
     );
-    await configured.timeout(const Duration(seconds: 5));
+    await configured.timeout(patience);
 
     expect(host.status, NetworkStatus.connected);
     expect(client.status, NetworkStatus.connected);
@@ -73,37 +105,15 @@ void main() {
 
   test('ходы идут через send/events в обе стороны, отмена подтверждается', () async {
     final host = await startHost();
-    final client = NetworkGameService();
-    addTearDown(() async {
-      await client.close();
-      await host.close();
-      client.dispose();
-      host.dispose();
-    });
-    final configured = client.events.firstWhere(
-      (event) => event.type == 'gameConfig',
-    );
-    await client.connect('127.0.0.1', host.port!, code: lobby.code);
-    await configured.timeout(const Duration(seconds: 5));
+    final client = await connectClient(host);
+    closeBoth(host, client);
 
     final game = GameCatalog.byId(exampleGameId)!;
-    final atHost = <NetworkMessage>[];
-    final atClient = <NetworkMessage>[];
-    final hostSub = host.events.listen(atHost.add);
-    final clientSub = client.events.listen(atClient.add);
-    addTearDown(() {
-      unawaited(hostSub.cancel());
-      unawaited(clientSub.cancel());
-    });
 
     // Client → host: the move is checked by the game before it is applied.
+    final atHost = nextMessage(host, 'move');
     client.send(const NetworkMessage('move', {'from': 'a1', 'to': 'a3'}));
-    await waitUntil(
-      host,
-      () => atHost.any((message) => message.type == 'move'),
-      timeout: const Duration(seconds: 5),
-    );
-    final move = atHost.firstWhere((message) => message.type == 'move');
+    final move = await atHost;
     expect(move.data['from'], 'a1');
     game.validateMove(move.data);
     // A move that does not pass the game's own check is refused.
@@ -113,59 +123,31 @@ void main() {
     );
 
     // Host → client: the other direction works the same way.
+    final atClient = nextMessage(client, 'move');
     host.send(const NetworkMessage('move', {'from': 'b2', 'to': 'b4'}));
-    await waitUntil(
-      client,
-      () => atClient.any((message) => message.type == 'move'),
-      timeout: const Duration(seconds: 5),
-    );
-    game.validateMove(
-      atClient.firstWhere((message) => message.type == 'move').data,
-    );
+    game.validateMove((await atClient).data);
 
     // Undo is a request and an answer, both sides see the exchange.
+    final request = nextMessage(host, 'undoRequest');
     client.send(const NetworkMessage('undoRequest', {'ply': 1}));
-    await waitUntil(
-      host,
-      () => atHost.any((message) => message.type == 'undoRequest'),
-      timeout: const Duration(seconds: 5),
-    );
+    expect((await request).data['ply'], 1);
+
+    final answer = nextMessage(client, 'undoResponse');
     host.send(const NetworkMessage('undoResponse', {'accepted': true}));
-    await waitUntil(
-      client,
-      () => atClient.any((message) => message.type == 'undoResponse'),
-      timeout: const Duration(seconds: 5),
-    );
-    expect(
-      atClient
-          .firstWhere((message) => message.type == 'undoResponse')
-          .data['accepted'],
-      isTrue,
-    );
+    expect((await answer).data['accepted'], isTrue);
   });
 
   test('после close обе стороны считают связь потерянной', () async {
     final host = await startHost();
-    final client = NetworkGameService();
-    addTearDown(() async {
-      await client.close();
-      client.dispose();
-      host.dispose();
-    });
-    final configured = client.events.firstWhere(
-      (event) => event.type == 'gameConfig',
-    );
-    final lost = client.events.firstWhere(
-      (event) => event.type == 'disconnected',
-    );
-    await client.connect('127.0.0.1', host.port!, code: lobby.code);
-    await configured.timeout(const Duration(seconds: 5));
+    final client = await connectClient(host);
+    closeBoth(host, client);
     expect(client.status, NetworkStatus.connected);
 
+    final lost = nextMessage(client, 'disconnected');
     await host.close();
-    await lost.timeout(const Duration(seconds: 5));
+    await lost;
+    await waitUntil(client, () => client.status == NetworkStatus.disconnected);
     expect(client.status, NetworkStatus.disconnected);
-    expect(host.status, isNot(NetworkStatus.connected));
   });
 
   test('чужая версия протокола получает вежливый отказ', () async {
@@ -191,10 +173,10 @@ void main() {
       }).encode(),
     );
 
-    final refusal = await answer.future.timeout(const Duration(seconds: 5));
+    final refusal = await answer.future.timeout(patience);
     expect(refusal.type, 'error');
     expect(refusal.data['message'], contains('разные версии'));
-    expect(host.status, NetworkStatus.disconnected);
+    await waitUntil(host, () => host.status == NetworkStatus.disconnected);
     expect(host.refusal, contains('разные версии'));
   });
 }
