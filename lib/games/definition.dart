@@ -118,7 +118,7 @@ class GameDefinition {
     required this.validateMove,
     required this.hostSide,
   }) : assert(id != '', 'У игры должен быть id'),
-       assert(rules.length > 0, 'У игры должны быть правила: $id'),
+       assert(rules.isNotEmpty, 'У игры должны быть правила: $id'),
        assert(
          settings.every((setting) => setting.key != ''),
          'У переключателя должен быть ключ: $id',

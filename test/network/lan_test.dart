@@ -166,7 +166,7 @@ void main() {
       answer.complete(NetworkMessage.decode(raw));
     });
     socket.add(
-      const NetworkMessage('hello', {
+      NetworkMessage('hello', {
         'version': protocolVersion + 1,
         'code': lobby.code,
         'name': 'Гость',

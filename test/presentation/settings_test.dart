@@ -140,7 +140,7 @@ void main() {
 
     // The other switch of the same game is untouched.
     expect(settings.flag('example', 'reminder'), isTrue);
-    expect(find.byKey(field), findsOneWidget);
+    expect(field, findsOneWidget);
 
     await tearDownPage(tester);
 
