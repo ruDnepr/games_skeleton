@@ -48,6 +48,13 @@ class _NetworkPageState extends State<NetworkPage> {
   @override
   void initState() {
     super.initState();
+    // The game plugs in exactly one thing: the check of its own moves. The
+    // rest of the transport — discovery, sockets, handshake, heartbeats — is
+    // shared and knows nothing about rules.
+    service.attachGame(
+      gameId: widget.game.id,
+      checkMove: widget.game.validateMove,
+    );
     _subscription = service.events.listen(_onEvent);
   }
 
@@ -212,7 +219,7 @@ class _NetworkPageState extends State<NetworkPage> {
 
   List<Widget> _chooseContent() => [
     const Intro(
-      eyebrow: 'ИГРАЙ С ДРУГОМ',
+      eyebrow: 'ВМЕСТЕ ВЕСЕЛЕЕ',
       title: 'Играй с другом',
       subtitle:
           'Подключите оба устройства к одной сети Wi-Fi или точке доступа.',

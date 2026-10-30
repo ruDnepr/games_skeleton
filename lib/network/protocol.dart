@@ -10,7 +10,7 @@ const protocolVersion = 1;
 /// mDNS-служба, по которой игры находят друг друга в одной сети.
 const serviceType = '_diana-games._tcp';
 
-/// Без похожих символов: 0/O, 1/I/L. Код диктуют вслух, поэтому их нет.
+/// Без похожих символов: 0/O и 1/I. Код диктуют вслух, поэтому их нет.
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 final _codePattern = RegExp(r'^[A-HJ-NP-Z2-9]{6}$');
 

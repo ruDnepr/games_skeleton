@@ -21,8 +21,12 @@ void main() {
   );
   const patience = Duration(seconds: 5);
 
+  // The one thing a game gives the transport: its own check of a move.
+  final game = GameCatalog.byId(exampleGameId)!;
+
   Future<NetworkGameService> startHost() async {
     final host = NetworkGameService();
+    host.attachGame(gameId: game.id, checkMove: game.validateMove);
     await host.host(
       lobby,
       advertise: false,
@@ -36,6 +40,7 @@ void main() {
   /// Connects a client by `IP:port` and waits until the lobby arrives.
   Future<NetworkGameService> connectClient(NetworkGameService host) async {
     final client = NetworkGameService();
+    client.attachGame(gameId: game.id, checkMove: game.validateMove);
     final configured = client.events.firstWhere(
       (event) => event.type == 'gameConfig',
     );
@@ -108,24 +113,18 @@ void main() {
     final client = await connectClient(host);
     closeBoth(host, client);
 
-    final game = GameCatalog.byId(exampleGameId)!;
-
-    // Client → host: the move is checked by the game before it is applied.
+    // Client → host: the transport asked the game about this move and the game
+    // let it through, so the session sees it.
     final atHost = nextMessage(host, 'move');
     client.send(const NetworkMessage('move', {'from': 'a1', 'to': 'a3'}));
     final move = await atHost;
     expect(move.data['from'], 'a1');
-    game.validateMove(move.data);
-    // A move that does not pass the game's own check is refused.
-    expect(
-      () => game.validateMove({'from': 'a1', 'to': 'z9'}),
-      throwsFormatException,
-    );
+    expect(move.data['to'], 'a3');
 
     // Host → client: the other direction works the same way.
     final atClient = nextMessage(client, 'move');
     host.send(const NetworkMessage('move', {'from': 'b2', 'to': 'b4'}));
-    game.validateMove((await atClient).data);
+    expect((await atClient).data['to'], 'b4');
 
     // Undo is a request and an answer, both sides see the exchange.
     final request = nextMessage(host, 'undoRequest');
@@ -135,6 +134,29 @@ void main() {
     final answer = nextMessage(client, 'undoResponse');
     host.send(const NetworkMessage('undoResponse', {'accepted': true}));
     expect((await answer).data['accepted'], isTrue);
+  });
+
+  test('невозможный ход не доходит до партии: связь рвётся с причиной', () async {
+    final host = await startHost();
+    final client = await connectClient(host);
+    closeBoth(host, client);
+
+    final seenByHost = <NetworkMessage>[];
+    final subscription = host.events.listen(seenByHost.add);
+    addTearDown(subscription.cancel);
+
+    // «z9» лежит вне доски, поэтому игра такой ход не принимает.
+    final refusal = nextMessage(client, 'error');
+    client.send(const NetworkMessage('move', {'from': 'a1', 'to': 'z9'}));
+
+    final error = await refusal.timeout(patience);
+    expect(error.data['message'], 'Ход не распознан');
+
+    await waitUntil(() => host.status == NetworkStatus.disconnected);
+    await waitUntil(() => client.status == NetworkStatus.disconnected);
+
+    // The session never saw the move: it was stopped before the game applied it.
+    expect(seenByHost.where((event) => event.type == 'move'), isEmpty);
   });
 
   test('после close обе стороны считают связь потерянной', () async {

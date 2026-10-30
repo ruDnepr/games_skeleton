@@ -46,6 +46,21 @@ class NetworkGameService extends ChangeNotifier {
   /// Why the other device refused the game, in words the child can read. Kept
   /// so the lobby can say «разные версии игры» instead of a silent drop.
   String? refusal;
+
+  /// The game this connection is for and the check its own rules give. The
+  /// transport knows no rules: it only asks the game about every move that
+  /// arrives, so two devices never drift apart in the middle of a session.
+  String? _expectedGameId;
+  void Function(Map<String, Object?> move)? _checkMove;
+
+  /// What the lobby of a game hands to the shared transport.
+  void attachGame({
+    required String gameId,
+    required void Function(Map<String, Object?> move) checkMove,
+  }) {
+    _expectedGameId = gameId;
+    _checkMove = checkMove;
+  }
   String peerName = 'Друг';
 
   HttpServer? _server;
@@ -298,6 +313,12 @@ class NetworkGameService extends ChangeNotifier {
             _lost();
             return;
           }
+          if (_expectedGameId != null && config!.gameId != _expectedGameId) {
+            // The friend invited us to another game: the session would speak
+            // about rules this screen does not know.
+            unawaited(_refuse('Это приглашение для другой игры'));
+            return;
+          }
           _handshake = true;
           _connected();
           _events.add(message);
@@ -312,6 +333,24 @@ class NetworkGameService extends ChangeNotifier {
           _lost();
         }
         return;
+      }
+      if (message.type == 'move') {
+        final check = _checkMove;
+        if (check != null) {
+          try {
+            check(message.data);
+          } on FormatException catch (error) {
+            // The game does not accept the move, so the two sides would
+            // disagree: the session ends here instead of drifting apart.
+            final String? reason = error.message;
+            unawaited(
+              _refuse(
+                reason == null || reason.isEmpty ? 'Ход не распознан' : reason,
+              ),
+            );
+            return;
+          }
+        }
       }
       switch (message.type) {
         case 'ping':
@@ -358,6 +397,13 @@ class NetworkGameService extends ChangeNotifier {
   }
 
   void _sendRaw(NetworkMessage message) => _channel?.sink.add(message.encode());
+
+  /// Says why the session cannot go on and closes the connection.
+  Future<void> _refuse(String reason) async {
+    refusal = reason;
+    _sendRaw(NetworkMessage('error', {'message': reason}));
+    _lost();
+  }
 
   void _lost() {
     if (_closed || status == NetworkStatus.disconnected) return;

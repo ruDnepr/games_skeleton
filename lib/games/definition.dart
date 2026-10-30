@@ -148,6 +148,11 @@ class GameDefinition {
   final GameOptionsParser parseOptions;
 
   /// Checks a move that arrived over the network.
+  ///
+  /// The lobby hands this function to the shared transport, which calls it for
+  /// every incoming move before the session sees it. Throwing [FormatException]
+  /// refuses the move and closes the connection, so the two devices never
+  /// disagree about the position.
   final GameMoveCheck validateMove;
 
   /// The host's place in the game, sent in the lobby.
