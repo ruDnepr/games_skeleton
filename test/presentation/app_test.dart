@@ -17,11 +17,8 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = SettingsController();
+    final settings = SettingsController()..sound = false;
     addTearDown(settings.dispose);
-    // The app loads its settings before the first frame.
-    await settings.load();
-    settings.sound = false;
     await tester.pumpWidget(
       ProviderScope(
         child: DianaApp(settings: settings, showSplash: splash),

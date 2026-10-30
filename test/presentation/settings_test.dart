@@ -25,8 +25,9 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final settings = SettingsController();
     addTearDown(settings.dispose);
-    // load() opens the storage; without it a switch would live only in memory.
-    await settings.load();
+    // The storage is opened outside the fake clock of a widget test: awaiting
+    // the real plugin call inside the test itself would never finish.
+    await tester.runAsync(settings.load);
     settings.sound = false;
     await tester.pumpWidget(
       MaterialApp(

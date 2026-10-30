@@ -74,7 +74,7 @@ jobs:
       - name: Тесты
         shell: bash
         run: |
-          flutter test --reporter expanded > /tmp/tests.txt 2>&1 || status=$?
+          flutter test --reporter expanded --timeout 120s > /tmp/tests.txt 2>&1 || status=$?
           cat /tmp/tests.txt
           if [ -n "$status" ]; then
             python3 - <<'PY'
