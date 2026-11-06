@@ -36,6 +36,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 minification disabled: the app is small enough without it,
+            // and the CI runner (7 GB RAM) occasionally runs out of memory
+            // during the R8 pass on the combined codebase of nine games.
+            isMinifyEnabled = false
         }
     }
 }
