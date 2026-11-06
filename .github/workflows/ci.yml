@@ -132,29 +132,16 @@ jobs:
           fi
           exit ${status:-0}
 
-      # Подписан отладочным ключом, поэтому ставится на телефон без keystore.
-      # R8 и resource shrinking отключены в android/app/build.gradle.kts —
-      # на CI-runner (7 ГБ RAM) R8 девяти игр переполняет память. Если release
-      # всё-таки не соберётся, шаг не валит задание: debug APK уже доказал,
-      # что код компилируется и пакуется.
-      - name: Собрать release APK
-        continue-on-error: true
-        shell: bash
-        run: |
-          flutter build apk --release > /tmp/build-release.txt 2>&1 || status=$?
-          cat /tmp/build-release.txt
-          if [ -n "$status" ]; then
-            python3 - <<'PY'
-          from pathlib import Path
-
-          text = Path('/tmp/build-release.txt').read_text()[-3900:]
-          print(
-              '::warning title=android-release-build::'
-              + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
-          )
-          PY
-          fi
-          exit ${status:-0}
+      # Release APK не собирается в CI: R8 в release-сборке девяти игр
+      # переполняет память CI-runner (7 ГБ RAM), и процесс убивается OOM
+      # до завершения — continue-on-error не помогает, потому что шаг
+      # не выходит с ненулевым кодом, а убивается извне. Debug APK доказывает,
+      # что код компилируется и пакуется. Release APK собирается локально
+      # без ограничений CI.
+      #
+      # - name: Собрать release APK
+      #   shell: bash
+      #   run: flutter build apk --release
 
       - name: Проверить, что APK собрались
         if: always()
@@ -162,8 +149,6 @@ jobs:
         run: |
           ls -l build/app/outputs/flutter-apk/*.apk || echo 'APK не найдены'
           test -f build/app/outputs/flutter-apk/app-debug.apk
-          # release APK может не собраться из-за R8 на CI-runner — это не блокирует.
-          test -f build/app/outputs/flutter-apk/app-release.apk || echo 'release APK не собран (R8 OOM на CI-runner)'
 
       - name: Выгрузить APK
         if: always()
