@@ -1,30 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:games_for_diana/games/example/game.dart';
+import 'package:games_for_diana/games/backgammon/game.dart';
 import 'package:games_for_diana/presentation/rules_page.dart';
 import 'package:games_for_diana/presentation/theme.dart';
 
-/// The rules screen draws the cards of the game and nothing else.
+/// Экран правил рисует карточки игры и ничего лишнего.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('экран правил рисует все карточки игры по порядку', (tester) async {
-    // A tall surface, so every card is built and can be measured at once.
+    // Высокая поверхность, чтобы все карточки строились и измерялись сразу.
     tester.view.physicalSize = const Size(420, 2600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      MaterialApp(theme: dianaTheme(), home: RulesPage(game: exampleGame)),
+      MaterialApp(theme: dianaTheme(), home: RulesPage(game: backgammonGame)),
     );
     await tester.pump();
 
     expect(find.text('Это просто!'), findsOneWidget);
-    expect(find.text(exampleGame.tagline), findsOneWidget);
+    expect(find.text(backgammonGame.tagline), findsOneWidget);
 
     final tops = <double>[];
-    for (final card in exampleGame.rules) {
+    for (final card in backgammonGame.rules) {
       final finder = find.byKey(Key('rule-card-${card.number}'));
       expect(finder, findsOneWidget, reason: 'карточка ${card.number}');
       expect(
@@ -47,32 +47,42 @@ void main() {
       tops.add(tester.getTopLeft(finder).dy);
     }
 
-    // The cards go down the page exactly in the order the game declared them.
+    // Карточки идут вниз ровно в том порядке, в котором их объявила игра.
     expect(tops, orderedEquals([...tops]..sort()));
-    expect(tops.toSet().length, exampleGame.rules.length);
+    expect(tops.toSet().length, backgammonGame.rules.length);
+
+    // Прокручиваем к концу, чтобы закрывающая строка гарантированно
+    // построилась — карточек нард десять, и они длиннее, чем у заготовки.
+    await tester.drag(find.byType(ListView), const Offset(0, -1500));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Ошибаться и пробовать снова — это нормально! ✨'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('на экране правил только данные игры и слоганы каркаса', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(420, 2600);
+    // Десять карточек нард длиннее, чем у заготовки: берём высоту с запасом,
+    // чтобы построилась и закрывающая строка.
+    tester.view.physicalSize = const Size(420, 4200);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      MaterialApp(theme: dianaTheme(), home: RulesPage(game: exampleGame)),
+      MaterialApp(theme: dianaTheme(), home: RulesPage(game: backgammonGame)),
     );
     await tester.pump();
 
-    // Everything the screen shows comes either from the game or from the
-    // shared frame: no text of another game is baked into the widget.
+    // Всё на экране — либо от игры, либо от общего каркаса.
     final expected = <String>{
       'Правила',
       'УЧИМСЯ ИГРАЯ',
       'Это просто!',
-      exampleGame.tagline,
-      for (final card in exampleGame.rules) ...<String>[
+      backgammonGame.tagline,
+      for (final card in backgammonGame.rules) ...<String>[
         '${card.number}',
         card.title,
         card.text,
@@ -88,7 +98,6 @@ void main() {
       expect(expected.contains(text), isTrue, reason: text);
     }
 
-    // The closing line of the screen is a slogan of the frame, not of a game.
     expect(
       find.text('Ошибаться и пробовать снова — это нормально! ✨'),
       findsOneWidget,

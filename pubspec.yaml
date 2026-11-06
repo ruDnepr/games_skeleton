@@ -19,6 +19,7 @@ dependencies:
   shelf_web_socket: ^3.0.0
   web_socket_channel: ^3.0.3
   shared_preferences: ^2.5.3
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:

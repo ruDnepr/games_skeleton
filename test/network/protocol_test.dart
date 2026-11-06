@@ -1,14 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/network/protocol.dart';
 
-/// The envelope both devices agree on before a game starts.
+/// Общий конверт, код и лобби — то, о чём устройства договариваются до партии.
 void main() {
   const lobby = LobbyConfig(
-    gameId: 'example',
-    hostSide: 'host',
+    gameId: 'backgammon',
+    hostSide: 'white',
     code: 'ABC234',
     hostName: 'Диана',
-    options: {'reminder': true, 'markers': false},
+    options: {'hints': true, 'numbers': false, 'autoRoll': false},
   );
 
   test('код из шести символов принимается только из своего алфавита', () {
@@ -35,23 +35,35 @@ void main() {
   });
 
   test('идентификатор игры — латиница без пробелов', () {
-    expect(isGameId('example'), isTrue);
+    expect(isGameId('backgammon'), isTrue);
     expect(isGameId('two_words2'), isTrue);
-    expect(isGameId('Example'), isFalse);
-    expect(isGameId('2example'), isFalse);
-    expect(isGameId('игра'), isFalse);
+    expect(isGameId('Backgammon'), isFalse);
+    expect(isGameId('2backgammon'), isFalse);
+    expect(isGameId('нарды'), isFalse);
     expect(isGameId(''), isFalse);
   });
 
-  test('сообщение кодируется и декодируется', () {
-    final decoded = NetworkMessage.decode(
+  test('сообщение кодируется и декодируется, включая тип dice', () {
+    final move = NetworkMessage.decode(
       const NetworkMessage('move', {
-        'from': 'a1',
-        'to': 'a3',
+        'player': 'white',
+        'dice': [3, 5],
+        'moves': [
+          {'player': 'white', 'die': 3, 'from': 23, 'to': 20},
+        ],
       }).encode(),
     );
-    expect(decoded.type, 'move');
-    expect(decoded.data['to'], 'a3');
+    expect(move.type, 'move');
+    expect(move.data['player'], 'white');
+
+    final dice = NetworkMessage.decode(
+      const NetworkMessage('dice', {
+        'player': 'black',
+        'dice': [6, 6],
+      }).encode(),
+    );
+    expect(dice.type, 'dice');
+    expect(dice.data['player'], 'black');
 
     final undo = NetworkMessage.decode(
       const NetworkMessage('undoRequest', {'ply': 2}).encode(),
@@ -85,11 +97,11 @@ void main() {
       ).data,
     );
     expect(received.version, protocolVersion);
-    expect(received.gameId, 'example');
-    expect(received.hostSide, 'host');
+    expect(received.gameId, 'backgammon');
+    expect(received.hostSide, 'white');
     expect(received.code, 'ABC234');
     expect(received.hostName, 'Диана');
-    expect(received.options['reminder'], isTrue);
+    expect(received.options['hints'], isTrue);
 
     // Данные переживают дорогу через JSON как есть.
     expect(
@@ -108,20 +120,20 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => LobbyConfig.fromJson(lobby.toJson()..['gameId'] = 'Игра'),
+      () => LobbyConfig.fromJson(lobby.toJson()..['gameId'] = 'Нарды'),
       throwsFormatException,
     );
     // Игра разбирает свои опции сама: чужой тип и лишний ключ — отказ.
     expect(
       () => LobbyConfig.fromJson(
-        lobby.toJson()..['options'] = {'reminder': 'да', 'markers': false},
+        lobby.toJson()..['options'] = {'hints': 'да', 'numbers': false},
       ),
       throwsFormatException,
     );
     expect(
       () => LobbyConfig.fromJson(
         lobby.toJson()
-          ..['options'] = {'reminder': true, 'markers': false, 'extra': 1},
+          ..['options'] = {'hints': true, 'numbers': false, 'extra': 1},
       ),
       throwsFormatException,
     );

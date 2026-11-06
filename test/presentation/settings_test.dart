@@ -1,20 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/settings.dart';
-import 'package:games_for_diana/games/example/game.dart';
+import 'package:games_for_diana/games/backgammon/game.dart';
 import 'package:games_for_diana/presentation/settings_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The name field is the only place where the child types, so it is checked on
-/// its own: focus, typing without the page fighting back, and committing. The
-/// switches of a game are checked here too.
+/// Поле имени — единственное место, где ребёнок печатает, поэтому оно
+/// проверяется отдельно: фокус, ввод без борьбы страницы и сохранение. Тут же
+/// проверяются переключатели игры.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  /// A tall surface, so the whole settings page (and the name field with it) is
-  /// built and can be focused without scrolling.
+  /// Высокая поверхность, чтобы вся страница настроек (и поле имени) строилась
+  /// и могла получить фокус без прокрутки.
   Future<SettingsController> pumpSettings(
     WidgetTester tester, {
     bool withGame = false,
@@ -25,15 +25,15 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final settings = SettingsController();
     addTearDown(settings.dispose);
-    // The storage is opened outside the fake clock of a widget test: awaiting
-    // the real plugin call inside the test itself would never finish.
+    // Хранилище открывается вне фейковых часов виджет-теста: ожидание реального
+    // вызова плагина внутри теста никогда бы не завершилось.
     await tester.runAsync(settings.load);
     settings.sound = false;
     await tester.pumpWidget(
       MaterialApp(
         home: SettingsPage(
           settings: settings,
-          game: withGame ? exampleGame : null,
+          game: withGame ? backgammonGame : null,
         ),
       ),
     );
@@ -41,8 +41,6 @@ void main() {
     return settings;
   }
 
-  /// Removes the page before the settings controller is disposed by the
-  /// teardown, so nothing touches it after it is gone.
   Future<void> tearDownPage(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
@@ -63,9 +61,6 @@ void main() {
 
     await tester.enterText(field, 'Алиса');
     await tester.pump();
-    // The page rebuilds on every change of the settings; the field must keep
-    // both its text and its focus, otherwise the keyboard closes and nothing
-    // can be typed.
     expect(tester.widget<TextField>(field).controller!.text, 'Алиса');
     expect(node.hasFocus, isTrue);
 
@@ -86,7 +81,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(settings.nickname, 'Диана');
-    // Nothing half-typed is left in the field.
     expect(tester.widget<TextField>(field).controller!.text, 'Диана');
 
     await tearDownPage(tester);
@@ -123,38 +117,35 @@ void main() {
     await tester.enterText(field, 'Маша');
     await tester.pump();
 
-    // The page goes away while the field is still focused.
     await tearDownPage(tester);
     await tester.pump();
 
     expect(settings.nickname, 'Маша');
   });
 
-  testWidgets('переключатель игры сохраняется и переживает load', (
-    tester,
-  ) async {
+  testWidgets('переключатель игры сохраняется и переживает load', (tester) async {
     final settings = await pumpSettings(tester, withGame: true);
-    final switchKey = const Key('game-flag-example-markers');
+    final switchKey = const Key('game-flag-backgammon-numbers');
     expect(find.byKey(switchKey), findsOneWidget);
-    expect(settings.flag('example', 'markers'), isFalse);
+    expect(settings.flag('backgammon', 'numbers'), isFalse);
 
     await tester.tap(find.byKey(switchKey));
     await tester.pump();
-    expect(settings.flag('example', 'markers'), isTrue);
+    expect(settings.flag('backgammon', 'numbers'), isTrue);
 
-    // The other switch of the same game is untouched.
-    expect(settings.flag('example', 'reminder'), isTrue);
+    // Другой переключатель той же игры не тронут.
+    expect(settings.flag('backgammon', 'hints'), isTrue);
     expect(field, findsOneWidget);
 
     await tearDownPage(tester);
 
-    // A restart of the app reads the same value back.
+    // Перезапуск приложения читает то же значение.
     final restored = SettingsController();
     await restored.load();
-    expect(restored.flag('example', 'markers'), isTrue);
+    expect(restored.flag('backgammon', 'numbers'), isTrue);
 
     await tester.pumpWidget(
-      MaterialApp(home: SettingsPage(settings: restored, game: exampleGame)),
+      MaterialApp(home: SettingsPage(settings: restored, game: backgammonGame)),
     );
     await tester.pump();
     final tile = tester.widget<SwitchListTile>(
