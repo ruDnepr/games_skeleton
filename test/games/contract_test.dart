@@ -47,7 +47,9 @@ void main() {
       final keys = game.settings.map((setting) => setting.key).toList();
       expect(keys.toSet().length, keys.length, reason: game.id);
       for (final setting in game.settings) {
-        expect(setting.key, matches(RegExp(r'^[a-z][a-z0-9_]*$')));
+        // Латиница, цифры и подчёркивание, со строчной буквы; camelCase
+        // (например, autoRoll, hintButton) тоже допустим.
+        expect(setting.key, matches(RegExp(r'^[a-z][a-zA-Z0-9_]*$')));
         expect(
           GameCatalog.defaultFlag(game.id, setting.key),
           setting.defaultValue,
