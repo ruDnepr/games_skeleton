@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/catalog.dart';
 import 'package:games_for_diana/app/settings.dart';
-import 'package:games_for_diana/games/definition.dart';
 import 'package:games_for_diana/network/protocol.dart';
 
 /// Контракт, который каждая игра каталога обязана соблюдать.
