@@ -43,7 +43,7 @@ flutter build apk --release              # Android, подписан отлад�
 flutter build ios --simulator --debug --no-codesign # iOS, на macOS
 ```
 
-Идентификаторы приложения: Android `ru.dnepr.games_for_diana`, `targetSdk = 36`; iOS bundle id `ru.dnepr.gamesForDiana`, имя `games_for_diana`, отображаемое имя «Игры для Дианы». Разрешения сети уже прописаны: на Android — `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` и `CHANGE_WIFI_MULTICAST_STATE` (без последнего mDNS не ищет хоста), на iOS — `NSLocalNetworkUsageDescription` и `NSBonjourServices` с `_diana-games._tcp`.
+Идентификаторы приложения: Android `ru.dnepr.diana_games`, `targetSdk = 36`; iOS bundle id `ru.dnepr.dianaGames`, имя `diana_games`, отображаемое имя «Игры для Дианы». ApplicationId уникален, чтобы не конфликтовать с прежними отдельными играми (Нарды, Го, Шашки и т.д.), которые тоже собирались на скелете с прежним `ru.dnepr.games_for_diana` и имеют другую debug-подпись. Разрешения сети уже прописаны: на Android — `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` и `CHANGE_WIFI_MULTICAST_STATE` (без последнего mDNS не ищет хоста), на iOS — `NSLocalNetworkUsageDescription` и `NSBonjourServices` с `_diana-games._tcp`.
 
 ## Как добавить новую игру за пять шагов
 

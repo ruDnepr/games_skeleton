@@ -56,7 +56,7 @@ cat /tmp/integration.txt
   echo '--- last lines of the main log'
   adb logcat -d -v brief 2>/dev/null | tail -n 250 || true
   echo '--- app memory'
-  adb shell dumpsys meminfo ru.dnepr.games_for_diana 2>/dev/null | head -n 20 || true
+  adb shell dumpsys meminfo ru.dnepr.diana_games 2>/dev/null | head -n 20 || true
 } > /tmp/device.txt 2>&1
 cat /tmp/device.txt
 
