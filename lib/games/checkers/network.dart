@@ -6,27 +6,64 @@ import 'engine/model.dart';
 /// партий его не меняют.
 const checkersGameId = 'checkers';
 
+/// Ключ, под которым хранится выбранный хостом вариант шашек до создания
+/// сетевой игры.
+const checkersVariantKey = 'variant';
+
 /// Что игра рассказывает сопернику о себе в рукопожатии. Для шашек это
-/// переключатели отображения: подсветка и кнопка-подсказка. Каждое устройство
-/// рисует по своим настройкам, но карта проверяется, чтобы чужое лобби не
-/// пустило в партию неразборчивые данные.
+/// переключатели отображения (подсветка и кнопка-подсказка) и выбранный хостом
+/// вариант. Каждое устройство рисует по своим настройкам, но карта проверяется,
+/// чтобы чужое лобби не пустило в партию неразборчивые данные.
 Map<String, Object?> checkersOptions(SettingsController settings) => {
   'hints': settings.flag(checkersGameId, 'hints'),
   'hintButton': settings.flag(checkersGameId, 'hintButton'),
+  'variant': settings.gameString(
+    checkersGameId,
+    checkersVariantKey,
+    'russian',
+  ),
 };
 
 /// Опции шашек после разбора. Значения — только то, что игра умеет.
 class CheckersOptions {
-  const CheckersOptions({required this.hints, required this.hintButton});
+  const CheckersOptions({
+    required this.hints,
+    required this.hintButton,
+    required this.variant,
+  });
   final bool hints;
   final bool hintButton;
+
+  /// `'russian'`, `'american'`, `'international'` или `'giveaway'`. Хост
+  /// выбирает вариант до создания сетевой игры; клиент принимает тот, что
+  /// пришёл в рукопожатии.
+  final String variant;
+
+  /// Тип варианта для движка.
+  GameVariant get gameVariant => parseVariant(variant);
 }
+
+/// Преобразует строковое имя варианта в [GameVariant]. По умолчанию — русские.
+GameVariant parseVariant(String value) => switch (value) {
+  'american' => GameVariant.american,
+  'international' => GameVariant.international,
+  'giveaway' => GameVariant.giveaway,
+  _ => GameVariant.russian,
+};
+
+/// Обратное преобразование.
+String variantKey(GameVariant variant) => switch (variant) {
+  GameVariant.russian => 'russian',
+  GameVariant.american => 'american',
+  GameVariant.international => 'international',
+  GameVariant.giveaway => 'giveaway',
+};
 
 /// Разбирает опции соперника и бросает [FormatException] на чужое: неизвестные
 /// ключи, недостающие ключи, неверные типы. Транспорт зовёт это до начала
 /// партии, так что чужая игра или чужие данные отказываются у двери.
 CheckersOptions checkersParseOptions(Map<String, Object?> options) {
-  const allowed = {'hints', 'hintButton'};
+  const allowed = {'hints', 'hintButton', 'variant'};
   final unknown =
       options.keys.where((key) => !allowed.contains(key)).toList();
   if (unknown.isNotEmpty) {
@@ -34,10 +71,20 @@ CheckersOptions checkersParseOptions(Map<String, Object?> options) {
   }
   final hints = options['hints'];
   final hintButton = options['hintButton'];
-  if (hints is! bool || hintButton is! bool) {
+  final variant = options['variant'];
+  if (hints is! bool ||
+      hintButton is! bool ||
+      variant is! String ||
+      !const {'russian', 'american', 'international', 'giveaway'}.contains(
+        variant,
+      )) {
     throw const FormatException('Настройки игры не распознаны');
   }
-  return CheckersOptions(hints: hints, hintButton: hintButton);
+  return CheckersOptions(
+    hints: hints,
+    hintButton: hintButton,
+    variant: variant,
+  );
 }
 
 /// Проверяет пришедший по сети ход. Это проверка формы, без состояния: транспорт

@@ -30,7 +30,17 @@ final checkersGame = GameDefinition(
   options: checkersOptions,
   parseOptions: checkersParseOptions,
   validateMove: checkersValidateMove,
-  // Хост играет белыми и ходит первым (в классических — чёрные первые, но в
-  // сети выбираем единый вариант по умолчанию — русские).
+  // Хост играет белыми и ходит первым. Просто и предсказуемо для ребёнка.
   hostSide: (_) => 'white',
+  // Перед сетевым лобби хост выбирает вариант шашек — русские, классические,
+  // международные или поддавки. Выбор сохраняется в настройках и уезжает в
+  // рукопожатие через [checkersOptions].
+  preNetwork: (context, settings) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            CheckersVariantPage(settings: settings, forNetwork: true),
+      ),
+    );
+  },
 );
