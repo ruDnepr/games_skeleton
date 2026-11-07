@@ -1085,7 +1085,8 @@ class _BoardPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BoardPainter old) =>
-      old.controller != controller ||
       old.flipped != flipped ||
-      old.controller.state != controller.state;
+      old.controller.state.fingerprint != controller.state.fingerprint ||
+      old.controller.selected != controller.selected ||
+      old.controller.suggestedMove != controller.suggestedMove;
 }
