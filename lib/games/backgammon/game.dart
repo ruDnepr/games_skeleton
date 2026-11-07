@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../../app/settings.dart';
 import '../../presentation/theme.dart';
 import '../definition.dart';
-import 'engine/model.dart';
 import 'network.dart';
 import 'rules.dart';
 import 'settings.dart';

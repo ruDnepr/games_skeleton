@@ -8,6 +8,7 @@ import '../definition.dart';
 import 'backgammon_controller.dart';
 import 'engine/ai.dart';
 import 'engine/model.dart';
+import 'network.dart';
 import 'ui/backgammon_game.dart';
 import 'ui/dice_widget.dart';
 
