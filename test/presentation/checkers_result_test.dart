@@ -86,7 +86,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final settings = SettingsController()..sound = false;
     addTearDown(settings.dispose);
-    final game = await pumpCheckers(
+    await pumpCheckers(
       tester,
       settings: settings,
       mode: GameMode.computer,

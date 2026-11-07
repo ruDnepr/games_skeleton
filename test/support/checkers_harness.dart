@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/settings.dart';
-import 'package:games_for_diana/app/sounds.dart';
 import 'package:games_for_diana/games/checkers/checkers_controller.dart';
 import 'package:games_for_diana/games/checkers/engine/ai.dart';
 import 'package:games_for_diana/games/checkers/engine/model.dart';
-import 'package:games_for_diana/games/checkers/network.dart';
 import 'package:games_for_diana/games/checkers/session_page.dart';
 
 export 'async_wait.dart';
