@@ -144,6 +144,14 @@ void main() {
     await tester.tap(find.byKey(const Key('game-card-backgammon')));
     await tester.pumpAndSettle();
 
+    // У нард перед лобби — выбор варианта (короткие или длинные).
+    expect(find.text('Какие нарды?'), findsOneWidget);
+    expect(find.byKey(const Key('backgammon-variant-next')), findsOneWidget);
+
+    // После выбора варианта открывается лобби.
+    await tester.tap(find.byKey(const Key('backgammon-variant-next')));
+    await tester.pumpAndSettle();
+
     expect(find.text('Создать игру'), findsOneWidget);
     expect(find.text('Найти игру / ввести код'), findsOneWidget);
   });

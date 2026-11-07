@@ -8,7 +8,7 @@ void main() {
     hostSide: 'white',
     code: 'ABC234',
     hostName: 'Диана',
-    options: {'hints': true, 'numbers': false, 'autoRoll': false},
+    options: {'hints': true, 'numbers': false, 'autoRoll': false, 'variant': 'short'},
   );
 
   test('код из шести символов принимается только из своего алфавита', () {

@@ -17,7 +17,7 @@ void main() {
     hostSide: 'white',
     code: 'ABC234',
     hostName: 'Диана',
-    options: {'hints': true, 'numbers': false, 'autoRoll': false},
+    options: {'hints': true, 'numbers': false, 'autoRoll': false, 'variant': 'short'},
   );
   const patience = Duration(seconds: 5);
 

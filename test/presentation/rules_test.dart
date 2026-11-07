@@ -10,7 +10,8 @@ void main() {
 
   testWidgets('экран правил рисует все карточки игры по порядку', (tester) async {
     // Высокая поверхность, чтобы все карточки строились и измерялись сразу.
-    tester.view.physicalSize = const Size(420, 2600);
+    // Карточки нард с пометками различий коротких/длинных — высокие.
+    tester.view.physicalSize = const Size(420, 3400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
