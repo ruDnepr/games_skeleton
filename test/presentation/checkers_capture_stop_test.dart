@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/settings.dart';
 import 'package:games_for_diana/games/checkers/engine/model.dart';

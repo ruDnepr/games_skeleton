@@ -257,7 +257,7 @@ class GuessPage extends StatefulWidget {
     this.revealDelay = const Duration(milliseconds: 1600),
   });
   final SettingsController settings;
-  final Random? random;
+  final math.Random? random;
   final Duration revealDelay;
 
   @override
@@ -267,7 +267,7 @@ class GuessPage extends StatefulWidget {
 class _GuessPageState extends State<GuessPage>
     with SingleTickerProviderStateMixin {
   late final int hiddenHand =
-      (widget.random ?? Random.secure()).nextInt(2);
+      (widget.random ?? math.Random.secure()).nextInt(2);
   late final AnimationController _bounce = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1150),
@@ -509,6 +509,12 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
   Duration _animStart = Duration.zero;
   MoveAnimation? _lastAnimation;
 
+  /// `Ticker` не реализует `Listenable`, поэтому напрямую передать его в
+  /// `ListenableBuilder` нельзя. Этот счётчик ретранслирует тики тикера как
+  /// уведомления `Listenable`: [_onTick] инкрементирует его, а `ListenableBuilder`
+  /// в [_board] слушает его и перестраивает доску на каждом кадре.
+  final ValueNotifier<int> _tickPulse = ValueNotifier<int>(0);
+
   bool resultShown = false;
   bool resultDialogOpen = false;
   bool resultRecorded = false;
@@ -541,7 +547,8 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
 
   void _onTick(Duration elapsed) {
     _tickerElapsed = elapsed;
-    // Перерисовку доски гоняет AnimatedBuilder на тикере в [_board].
+    _tickPulse.value++;
+    // Перерисовку доски гоняет ListenableBuilder на _tickPulse в [_board].
   }
 
   void _onGameChanged() {
@@ -550,16 +557,16 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
     if (anim != null && !identical(anim, _lastAnimation)) {
       _lastAnimation = anim;
       // Тикер при перезапуске сбрасывает elapsed в ноль — учитываем это.
-      if (_ticker.active) {
+      if (_ticker.isTicking) {
         _animStart = _tickerElapsed;
       } else {
         _animStart = Duration.zero;
         _ticker.start();
       }
     } else if (anim == null && controller.suggestedMove == null &&
-        _ticker.active) {
+        _ticker.isTicking) {
       _ticker.stop();
-    } else if (controller.suggestedMove != null && !_ticker.active) {
+    } else if (controller.suggestedMove != null && !_ticker.isTicking) {
       _ticker.start();
     }
     if (controller.fatalMessage != null && !errorShown) {
@@ -853,6 +860,7 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
   @override
   void dispose() {
     _ticker.dispose();
+    _tickPulse.dispose();
     controller.removeListener(_onGameChanged);
     controller.dispose();
     super.dispose();
@@ -970,8 +978,8 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
           ),
         ],
       ),
-      child: AnimatedBuilder(
-        animation: _ticker,
+      child: ListenableBuilder(
+        listenable: _tickPulse,
         builder: (context, _) => CheckersBoardView(
           controller: controller,
           flipped: flipped,
@@ -1460,7 +1468,7 @@ class _CelebrationState extends State<_Celebration>
 
 /// Доска: CustomPaint с тапами. Все подсветки (выбор, адресаты, подсказанные
 /// шашки, лучший ход, движущаяся шашка) рисуются здесь. Анимацию хода и
-/// пульсацию подсказки гоняет родительский `AnimatedBuilder` на тикере — он
+/// пульсацию подсказки гоняет родительский `ListenableBuilder` на `_tickPulse` — он
 /// обновляет [elapsed] и [animStart] на каждом кадре.
 class CheckersBoardView extends StatelessWidget {
   const CheckersBoardView({
@@ -1872,4 +1880,78 @@ class _BoardPainter extends CustomPainter {
       // new всегда даст равенство. Перестроение происходит только по тику
       // тикера или по уведомлению контроллера, так что лишних перерисовок нет.
       true;
+}
+
+/// Иконка шашки для списка ходов, шапок игроков и торжественного экрана.
+///
+/// Локальная копия из оригинального `checkers/lib/presentation/theme.dart`:
+/// в каркасе `games_skeleton/lib/presentation/theme.dart` этого класса нет, а
+/// шашкам он нужен здесь и сейчас, не плодя зависимость на общий каркас.
+class CheckerIcon extends StatelessWidget {
+  const CheckerIcon({
+    super.key,
+    this.dark = false,
+    this.size = 48,
+    this.crown = false,
+  });
+  final bool dark;
+  final double size;
+  final bool crown;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: dark
+            ? const [Color(0xFF6A6A73), Color(0xFF25232D)]
+            : const [Colors.white, Color(0xFFE9D9BA)],
+      ),
+      border: Border.all(
+        color: dark ? const Color(0xFF302C35) : const Color(0xFFCEB998),
+        width: 2,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: ink.withValues(alpha: .22),
+          blurRadius: 0,
+          offset: const Offset(0, 4),
+        ),
+        BoxShadow(
+          color: Colors.white.withValues(alpha: .7),
+          blurRadius: 0,
+          offset: const Offset(-1, -1),
+        ),
+      ],
+    ),
+    child: Center(
+      child: Container(
+        width: size * .64,
+        height: size * .64,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: crown
+                ? (dark
+                      ? const Color(0xFFE7B84C)
+                      : const Color(0xFFB56F00))
+                : (dark ? Colors.white24 : const Color(0xFFD9C9AC)),
+            width: crown ? 3 : 2,
+          ),
+        ),
+        child: crown
+            ? Icon(
+                Icons.star_rounded,
+                size: size * .4,
+                color: dark
+                    ? const Color(0xFFE7B84C)
+                    : const Color(0xFFC97C00),
+              )
+            : null,
+      ),
+    ),
+  );
 }
