@@ -158,6 +158,10 @@ jobs:
           name: diana-games-apk
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: warn
+          # Короткий срок хранения: артефакты накапливаются и забивают
+          # квоту хранилища GitHub Actions на бесплатном аккаунте. Одного
+          # дня хватает, чтобы скачать APK; дальше он автоматически удалится.
+          retention-days: 1
 
       - name: Включить ускорение эмулятора
         if: github.event_name == 'workflow_dispatch'
@@ -243,3 +247,4 @@ jobs:
           name: diana-games-ios-simulator
           path: Runner-simulator.zip
           if-no-files-found: warn
+          retention-days: 1
