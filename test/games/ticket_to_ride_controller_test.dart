@@ -57,26 +57,6 @@ void main() {
     throw StateError('Нет доступного маршрута');
   }
 
-  /// Добавляет в руку игрока 0 нужное число карт цвета маршрута [routeIndex],
-  /// чтобы его можно было занять.
-  void ensureClaimable(TicketToRideController controller, int routeIndex) {
-    final route = controller.routes[routeIndex];
-    final hand = controller.myHand;
-    final colorCount = hand.where((c) => c.color == route.color).length;
-    final need = route.length - colorCount;
-    if (need <= 0) return;
-    // Просто добавим карты напрямую через copyWith — для теста это безопаснее,
-    // чем прокручивать взятие карт из колоды.
-    final newHand = <TrainCard>[
-      ...hand,
-      for (var i = 0; i < need; i++) TrainCard(route.color),
-    ];
-    // Игнорируем приватность: контроллер не даёт прямого мутатора, поэтому
-    // используем его собственные действия — берём карты из колоды, пока не
-    // накопится нужно число карт цвета маршрута. Если колоды не хватает —
-    // пропускаем тест.
-  }
-
   group('старт', () {
     test('startLocal раздаёт партию и ставит ход на место 0', () {
       final controller = localController();

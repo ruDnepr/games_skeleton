@@ -6,7 +6,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/games/go/engine/model.dart';
 import 'package:games_for_diana/games/go/engine/rules.dart';
-import 'package:games_for_diana/games/go/engine/scoring.dart';
 
 GameSetup captureSetup({
   int size = 9,
