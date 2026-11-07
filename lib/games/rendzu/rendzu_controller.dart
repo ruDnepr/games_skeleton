@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../network/network_game_service.dart';
 import '../../network/protocol.dart';
 import '../definition.dart';
 import 'engine/ai.dart';
@@ -121,7 +122,7 @@ class RendzuController extends ChangeNotifier {
   /// Имя игрока цвета [side] для панели.
   String playerName(StoneColor side) {
     if (mode == RendzuMode.local) {
-      return side == StoneColor.black ? 'Игрок 1 (чёрные)' : 'Игрок 2 (белые)';
+      return side == StoneColor.black ? 'Игрок 1' : 'Игрок 2';
     }
     if (mode == RendzuMode.ai) {
       return side == playerSide ? settings.nickname : 'Компьютер';
@@ -151,20 +152,24 @@ class RendzuController extends ChangeNotifier {
     if (isOver) return false;
     if (mode == RendzuMode.ai) return _currentColor == playerSide && !_busy;
     if (mode == RendzuMode.network) {
+      // Связь потеряна — ходить нельзя.
+      if (network?.service.status != NetworkStatus.connected) return false;
       final mine = isHost ? StoneColor.black : StoneColor.white;
       return _currentColor == mine;
     }
     return true; // local
   }
 
-  /// Можно ли отменить ход.
+  /// Можно ли отменить ход. После победы в офлайн-режиме отмену разрешаем —
+  /// так кнопка «Отменить ход» в диалоге результата действительно отматывает
+  /// победный ход и даёт ребёнку доиграть.
   bool get canUndo {
-    if (isOver) return false;
     if (_history.isEmpty) return false;
     if (mode == RendzuMode.network) return false; // по сети отмены нет
     if (mode == RendzuMode.ai) {
       // В режиме ИИ отменяем пару «свой + компьютер», когда наша очередь.
-      if (!_isMyTurn) return false;
+      // После победы — тоже можно, чтобы откатить последний ход.
+      if (!isOver && !_isMyTurn) return false;
       return _history.length >= 2;
     }
     return true; // local
@@ -310,7 +315,7 @@ class RendzuController extends ChangeNotifier {
       _onWin();
       notifyListeners();
       if (!remote && mode == RendzuMode.network) {
-        network!.service.send(NetworkMessage('move', moveToJson(p, color)));
+        _send(NetworkMessage('move', moveToJson(p, color)));
       }
       return;
     }
@@ -324,7 +329,7 @@ class RendzuController extends ChangeNotifier {
       _onDraw();
       notifyListeners();
       if (!remote && mode == RendzuMode.network) {
-        network!.service.send(NetworkMessage('move', moveToJson(p, color)));
+        _send(NetworkMessage('move', moveToJson(p, color)));
       }
       return;
     }
@@ -334,7 +339,7 @@ class RendzuController extends ChangeNotifier {
     _recomputeHints();
 
     if (!remote && mode == RendzuMode.network) {
-      network!.service.send(NetworkMessage('move', moveToJson(p, color)));
+      _send(NetworkMessage('move', moveToJson(p, color)));
     }
 
     notifyListeners();
@@ -482,7 +487,7 @@ class RendzuController extends ChangeNotifier {
     );
     _isDraw = false;
     if (mode == RendzuMode.network) {
-      network!.service.send(const NetworkMessage('resign'));
+      _send(const NetworkMessage('resign'));
     }
     _onWin();
     notifyListeners();
@@ -624,6 +629,17 @@ class RendzuController extends ChangeNotifier {
     notifyListeners();
     // Транспорт уже разорвёт связь; закрывать сервис здесь не нужно — лобби
     // владеет им и закроет при выходе.
+  }
+
+  /// Отправляет сообщение по сети, молча игнорируя ошибку, если связь
+  /// потеряна — статус покажет пользовательский текст, а не падение.
+  void _send(NetworkMessage message) {
+    try {
+      network?.service.send(message);
+    } catch (_) {
+      _status = 'Связь потеряна. Проверь Wi-Fi и попробуй снова.';
+      notifyListeners();
+    }
   }
 
   @override

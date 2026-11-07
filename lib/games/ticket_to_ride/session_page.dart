@@ -290,11 +290,17 @@ class TicketToRideSessionPage extends StatefulWidget {
     this.vsAi = false,
     this.difficulty = Difficulty.easy,
     this.network,
+    this.controller,
   });
   final SettingsController settings;
   final bool vsAi;
   final Difficulty difficulty;
   final NetworkSession? network;
+
+  /// Внешний контроллер — для тестов. Если `null`, страница создаёт и
+  /// уничтожает свой собственный. Если передан — страница его использует,
+  /// но не уничтожает: это забота того, кто передал.
+  final TicketToRideController? controller;
 
   @override
   State<TicketToRideSessionPage> createState() =>
@@ -303,6 +309,7 @@ class TicketToRideSessionPage extends StatefulWidget {
 
 class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
   late final TicketToRideController _controller;
+  bool _ownedController = false;
   bool _overShown = false;
   bool _destinationsShown = false;
   // Фаза выбора путешествий в предыдущем кадре. Нужна, чтобы показывать диалог
@@ -313,12 +320,17 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
   @override
   void initState() {
     super.initState();
-    final sounds = GameSounds(widget.settings);
-    _controller = TicketToRideController(
-      settings: widget.settings,
-      sounds: sounds,
-      network: widget.network,
-    );
+    if (widget.controller != null) {
+      _controller = widget.controller!;
+    } else {
+      final sounds = GameSounds(widget.settings);
+      _controller = TicketToRideController(
+        settings: widget.settings,
+        sounds: sounds,
+        network: widget.network,
+      );
+      _ownedController = true;
+    }
     if (widget.network != null) {
       _controller.startNetwork();
     } else if (widget.vsAi) {
@@ -330,7 +342,9 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    if (_ownedController) {
+      _controller.dispose();
+    }
     super.dispose();
   }
 
@@ -347,7 +361,8 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
     final choosingNow = _controller.phase == TtrPhase.choosingDestinations &&
         _controller.canInteract;
     if (choosingNow && !_wasChoosingDestinations && !_destinationsShown) {
-      _destinationsShown = true;
+      // Флаг `_destinationsShown` ставится уже внутри `_showDestinations`,
+      // когда диалог действительно открылся. Здесь мы только планируем показ.
       WidgetsBinding.instance.addPostFrameCallback((_) => _showDestinations());
     }
     _wasChoosingDestinations = choosingNow;
@@ -557,6 +572,8 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
                         const SizedBox(height: 6),
                         _cardRow(),
                         const SizedBox(height: 6),
+                        _myPanel(),
+                        const SizedBox(height: 6),
                         _handRow(),
                         const SizedBox(height: 6),
                         _destinationsRow(),
@@ -583,106 +600,38 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
     final destCount = _controller.opponentDestinationsCount;
     final active = _controller.activeSide == TtrActive.friend ||
         _controller.activeSide == TtrActive.computer;
-    return Container(
+    return _PlayerPanel(
       key: const Key('opponent-panel'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: active
-            ? const Color(0xFFEDE5FD)
-            : Colors.white.withValues(alpha: .85),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: active ? const Color(0xFFB9A3EF) : const Color(0xFFF1EAE5),
-          width: 2,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: yellow,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.person_rounded, color: ink, size: 22),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
-                    color: ink,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.train_rounded,
-                      size: 14,
-                      color: ink.withValues(alpha: .6),
-                    ),
-                    const SizedBox(width: 3),
-                    Text(
-                      '$trains',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: ink,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.card_giftcard_rounded,
-                      size: 14,
-                      color: ink.withValues(alpha: .6),
-                    ),
-                    const SizedBox(width: 3),
-                    Text(
-                      '$destCount',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: ink,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.star_rounded,
-                      size: 14,
-                      color: ink.withValues(alpha: .6),
-                    ),
-                    const SizedBox(width: 3),
-                    Text(
-                      '$score',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: ink,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (active)
-            const Eyebrow(
-              'ХОД',
-              color: deepPurple,
-              background: Color(0xFFDCCDF8),
-              fontSize: 10,
-            ),
-        ],
-      ),
+      name: name,
+      trains: trains,
+      score: score,
+      destinations: destCount,
+      active: active,
+      avatarColor: yellow,
+      avatarIcon: Icons.person_rounded,
+      activeLabel: 'ХОД',
+    );
+  }
+
+  // ---- Панель игрока на этом устройстве -----------------------------------
+
+  Widget _myPanel() {
+    final name = _controller.nameFor(_controller.mySeat);
+    final trains = _controller.myTrainsLeft;
+    final score = _controller.myScore;
+    final destCount = _controller.myDestinations.length;
+    final active = _controller.activeSide == TtrActive.me;
+    return _PlayerPanel(
+      key: const Key('my-panel'),
+      name: name,
+      trains: trains,
+      score: score,
+      destinations: destCount,
+      active: active,
+      avatarColor: purple,
+      avatarIcon: Icons.person_rounded,
+      activeLabel: 'МОЙ ХОД',
+      highlightAvatar: true,
     );
   }
 
@@ -691,6 +640,7 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
   Widget _turnBanner() {
     final label = _controller.turnLabel;
     final isMyTurn = _controller.activeSide == TtrActive.me;
+    final notice = _controller.notice;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
@@ -708,32 +658,42 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w900,
-                color: isMyTurn ? Colors.white : ink,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      color: isMyTurn ? Colors.white : ink,
+                    ),
+                  ),
+                ),
+                if (notice != null && notice.isNotEmpty)
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      notice,
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: isMyTurn
+                            ? Colors.white.withValues(alpha: .85)
+                            : muted,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-          if (_controller.notice != null && _controller.notice!.isNotEmpty)
-            Flexible(
-              child: Text(
-                _controller.notice!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: isMyTurn
-                      ? Colors.white.withValues(alpha: .85)
-                      : muted,
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -773,9 +733,49 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
     if (_controller.phase != TtrPhase.main) return;
     final tap = _MapPoint(local.dx, local.dy);
     final routeIndex = _hitTestRoute(tap, size);
-    if (routeIndex != null) {
+    if (routeIndex == null) return;
+    _attemptClaim(routeIndex);
+  }
+
+  /// Пробует занять маршрут. Если у игрока есть выбор, сколько локомотивов
+  /// потратить, — открывает диалог. Если выбора нет (например, локомотивов
+  /// ноль или цветных карт ровно столько, сколько нужно) — занимает сразу.
+  void _attemptClaim(int routeIndex) {
+    if (!_controller.canInteract) return;
+    if (_controller.phase != TtrPhase.main) return;
+    if (!_controller.canClaimRoute(routeIndex)) {
+      // Контроллер сам поднимет понятное уведомление.
       _controller.claimRoute(routeIndex);
+      return;
     }
+    final route = _controller.routes[routeIndex];
+    final hand = _controller.myHand;
+    final colorCount = hand.where((c) => c.color == route.color).length;
+    final locoCount = hand
+        .where((c) => c.color == CardColor.locomotive)
+        .length;
+    final minLoco = (route.length - colorCount).clamp(0, route.length);
+    final maxLoco = locoCount.clamp(0, route.length);
+    if (minLoco >= maxLoco) {
+      // Выбора нет — занимаем сразу с единственно возможным числом локомотивов.
+      _controller.claimRoute(routeIndex, locomotiveCount: minLoco);
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => _ClaimRouteDialog(
+        controller: _controller,
+        routeIndex: routeIndex,
+        minLocomotives: minLoco,
+        maxLocomotives: maxLoco,
+        onConfirm: (locoCount) {
+          Navigator.of(dialogContext).pop();
+          _controller.claimRoute(routeIndex, locomotiveCount: locoCount);
+        },
+        onCancel: () => Navigator.of(dialogContext).pop(),
+      ),
+    );
   }
 
   int? _hitTestRoute(_MapPoint tap, Size size) {
@@ -951,15 +951,17 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
         children: [
           Expanded(
             child: _CtrlButton(
+              key: const Key('ttr-undo'),
               icon: Icons.undo_rounded,
               label: 'Отменить',
               enabled: _controller.canUndo,
               onTap: _controller.undo,
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: _CtrlButton(
+              key: const Key('ttr-hint'),
               icon: Icons.lightbulb_rounded,
               label: 'Подсказать',
               enabled: _controller.hintsEnabled &&
@@ -968,9 +970,10 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
               onTap: _controller.showHint,
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: _CtrlButton(
+              key: const Key('ttr-destinations'),
               icon: Icons.card_giftcard_rounded,
               label: 'Путешествия',
               enabled: _controller.canInteract &&
@@ -979,7 +982,28 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
               onTap: _controller.drawDestinations,
             ),
           ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _CtrlButton(
+              key: const Key('ttr-history'),
+              icon: Icons.history_rounded,
+              label: 'История',
+              enabled: _controller.history.isNotEmpty,
+              onTap: _showHistory,
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  void _showHistory() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _HistoryDialog(
+        controller: _controller,
+        onClose: () => Navigator.of(dialogContext).pop(),
       ),
     );
   }
@@ -1688,6 +1712,7 @@ class _ScoreTable extends StatelessWidget {
 
 class _CtrlButton extends StatelessWidget {
   const _CtrlButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.enabled,
@@ -1709,18 +1734,25 @@ class _CtrlButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         child: Container(
           height: 50,
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon, color: purple, size: 20),
               const SizedBox(height: 2),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: ink,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: ink,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1771,3 +1803,537 @@ class _MapPoint {
 }
 
 enum _OverChoice { again, home }
+
+// ---- Панель игрока (общая для соперника и меня) ---------------------------
+
+class _PlayerPanel extends StatelessWidget {
+  const _PlayerPanel({
+    super.key,
+    required this.name,
+    required this.trains,
+    required this.score,
+    required this.destinations,
+    required this.active,
+    required this.avatarColor,
+    required this.avatarIcon,
+    required this.activeLabel,
+    this.highlightAvatar = false,
+  });
+
+  final String name;
+  final int trains;
+  final int score;
+  final int destinations;
+  final bool active;
+  final Color avatarColor;
+  final IconData avatarIcon;
+  final String activeLabel;
+  final bool highlightAvatar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: active
+            ? const Color(0xFFEDE5FD)
+            : Colors.white.withValues(alpha: .85),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: active ? const Color(0xFFB9A3EF) : const Color(0xFFF1EAE5),
+          width: 2,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: avatarColor,
+              borderRadius: BorderRadius.circular(12),
+              border: highlightAvatar
+                  ? Border.all(color: Colors.white, width: 2)
+                  : null,
+            ),
+            child: Icon(avatarIcon, color: ink, size: 22),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      color: ink,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    _StatChip(
+                      icon: Icons.train_rounded,
+                      value: '$trains',
+                      tooltip: 'Вагонов осталось',
+                    ),
+                    const SizedBox(width: 6),
+                    _StatChip(
+                      icon: Icons.card_giftcard_rounded,
+                      value: '$destinations',
+                      tooltip: 'Путешествий',
+                    ),
+                    const SizedBox(width: 6),
+                    _StatChip(
+                      icon: Icons.star_rounded,
+                      value: '$score',
+                      tooltip: 'Очки за маршруты',
+                      accent: true,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (active)
+            Eyebrow(
+              activeLabel,
+              color: deepPurple,
+              background: const Color(0xFFDCCDF8),
+              fontSize: 10,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  const _StatChip({
+    required this.icon,
+    required this.value,
+    required this.tooltip,
+    this.accent = false,
+  });
+  final IconData icon;
+  final String value;
+  final String tooltip;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14,
+            color: accent ? purple : ink.withValues(alpha: .6),
+          ),
+          const SizedBox(width: 3),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: accent ? purple : ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---- Диалог занятия маршрута ----------------------------------------------
+
+/// Показывает, сколько цветных карт и локомотивов потратится на маршрут, и
+/// даёт выбрать число локомотивов степпером. Дальше нажимаем «Занять» —
+/// и контроллер применяет ход с выбранным числом.
+class _ClaimRouteDialog extends StatefulWidget {
+  const _ClaimRouteDialog({
+    required this.controller,
+    required this.routeIndex,
+    required this.minLocomotives,
+    required this.maxLocomotives,
+    required this.onConfirm,
+    required this.onCancel,
+  });
+
+  final TicketToRideController controller;
+  final int routeIndex;
+  final int minLocomotives;
+  final int maxLocomotives;
+  final ValueChanged<int> onConfirm;
+  final VoidCallback onCancel;
+
+  @override
+  State<_ClaimRouteDialog> createState() => _ClaimRouteDialogState();
+}
+
+class _ClaimRouteDialogState extends State<_ClaimRouteDialog> {
+  late int _locomotives;
+
+  @override
+  void initState() {
+    super.initState();
+    // По умолчанию бережём локомотивы: тратим минимум. Если цветных не
+    // хватает, минимум больше нуля — степпер встанет правильно.
+    _locomotives = widget.minLocomotives;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final route = widget.controller.routes[widget.routeIndex];
+    final hand = widget.controller.myHand;
+    final colorCount = hand.where((c) => c.color == route.color).length;
+    final locoCount = hand
+        .where((c) => c.color == CardColor.locomotive)
+        .length;
+    final colorToSpend = route.length - _locomotives;
+    final routeColor = _cardColor(route.color);
+    final locoColor = _cardColor(CardColor.locomotive);
+    return AlertDialog(
+      title: const Text(
+        'Занять маршрут',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: ink),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '${route.cityA.russianName} — ${route.cityB.russianName}',
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: ink,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '${route.color.russianName.toLowerCase()}, '
+              'длина ${route.length}, очков +${route.points}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: muted,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _SplitRow(
+            label: 'Цветные карты',
+            color: routeColor,
+            spent: colorToSpend,
+            total: colorCount,
+          ),
+          const SizedBox(height: 8),
+          _SplitRow(
+            label: 'Локомотивы',
+            color: locoColor,
+            spent: _locomotives,
+            total: locoCount,
+          ),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Локомотивов:',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: ink,
+                ),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    key: const Key('ttr-claim-loco-minus'),
+                    icon: const Icon(Icons.remove_circle_rounded),
+                    color: purple,
+                    onPressed: _locomotives > widget.minLocomotives
+                        ? () => setState(() => _locomotives--)
+                        : null,
+                  ),
+                  SizedBox(
+                    width: 32,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '$_locomotives',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: ink,
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('ttr-claim-loco-plus'),
+                    icon: const Icon(Icons.add_circle_rounded),
+                    color: purple,
+                    onPressed: _locomotives < widget.maxLocomotives
+                        ? () => setState(() => _locomotives++)
+                        : null,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: OutlinedButton(
+            onPressed: widget.onCancel,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ink,
+              backgroundColor: Colors.white,
+              side: const BorderSide(color: Color(0xFFE3D8F5)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+            ),
+            child: const Text('Отмена'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: FilledButton.icon(
+            key: const Key('ttr-claim-confirm'),
+            onPressed: () => widget.onConfirm(_locomotives),
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('Занять'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SplitRow extends StatelessWidget {
+  const _SplitRow({
+    required this.label,
+    required this.color,
+    required this.spent,
+    required this.total,
+  });
+  final String label;
+  final Color color;
+  final int spent;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: .7),
+              width: 1.5,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '$label: $spent из $total',
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: ink,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---- Диалог истории ходов -------------------------------------------------
+
+class _HistoryDialog extends StatelessWidget {
+  const _HistoryDialog({
+    required this.controller,
+    required this.onClose,
+  });
+  final TicketToRideController controller;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final history = controller.history;
+    return AlertDialog(
+      title: const Text(
+        'История ходов',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: ink),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: history.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  'Ходов ещё не было.',
+                  textAlign: TextAlign.center,
+                  style: dialogTextStyle,
+                ),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                itemCount: history.length,
+                itemBuilder: (context, index) {
+                  final record = history[history.length - 1 - index];
+                  final name = controller.nameFor(record.seat);
+                  final isMine = record.seat == controller.mySeat;
+                  return _HistoryRow(
+                    name: name,
+                    text: record.text,
+                    isMine: isMine,
+                    kind: record.kind,
+                  );
+                },
+              ),
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: FilledButton(
+            onPressed: onClose,
+            child: const Text('Закрыть'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HistoryRow extends StatelessWidget {
+  const _HistoryRow({
+    required this.name,
+    required this.text,
+    required this.isMine,
+    required this.kind,
+  });
+  final String name;
+  final String text;
+  final bool isMine;
+  final String kind;
+
+  Color _kindAccent() {
+    return switch (kind) {
+      'claim' => const Color(0xFF4DAA57),
+      'drawFaceUp' || 'drawDeck' => const Color(0xFF3D7EA6),
+      'drawDestinations' || 'keepDestinations' => const Color(0xFFB98800),
+      _ => muted,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isMine
+            ? const Color(0xFFEDE6FF)
+            : Colors.white.withValues(alpha: .85),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isMine ? purple : const Color(0xFFF1EAE5),
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 2),
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: _kindAccent(),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      color: isMine ? purple : ink,
+                    ),
+                  ),
+                ),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    text,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: ink,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

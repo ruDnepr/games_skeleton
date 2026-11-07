@@ -19,6 +19,48 @@ enum DominoMode { local, computer, network }
 /// по сети. Нужно, чтобы интерфейс показывал правильную подсказку.
 enum DominoActive { me, computer, friend, nobody }
 
+/// Что происходит на столе прямо сейчас — по этому экран рисует анимацию.
+enum TableAnimationKind { place, draw }
+
+class TableAnimation {
+  const TableAnimation({
+    required this.kind,
+    required this.seat,
+    required this.duration,
+    this.move,
+    this.tile,
+  });
+
+  final TableAnimationKind kind;
+  final int seat;
+  final DominoMove? move;
+  final DominoTile? tile;
+  final Duration duration;
+}
+
+/// Строчка истории.
+class MoveRecord {
+  const MoveRecord({required this.seat, required this.text});
+
+  final int seat;
+  final String text;
+
+  @override
+  String toString() => '#$seat $text';
+}
+
+class _UndoEntry {
+  const _UndoEntry({
+    required this.state,
+    required this.seat,
+    required this.records,
+  });
+
+  final GameState state;
+  final int seat;
+  final int records;
+}
+
 /// Контроллер партии домино. Содержит состояние, историю, звук и сеть;
 /// интерфейс только рисует то, что контроллер ему отдаёт, и зовёт его методы.
 ///
@@ -31,11 +73,20 @@ class DominoController extends ChangeNotifier {
     required this.settings,
     required this.sounds,
     this.network,
+    this.animationDuration = const Duration(milliseconds: 420),
+    this.initialState,
+    GameState Function()? initialStateFactory,
   }) : isHost = network?.isHost ?? false {
     if (network != null) {
       mode = DominoMode.network;
       _networkSub = network!.service.events.listen(_onNetworkEvent);
     }
+    if (initialState != null) {
+      _state = initialState;
+    } else if (initialStateFactory != null) {
+      _state = initialStateFactory();
+    }
+    settings.addListener(_settingsChanged);
   }
 
   final bool isHost;
@@ -44,6 +95,9 @@ class DominoController extends ChangeNotifier {
   final GameSounds sounds;
   final NetworkSession? network;
   bool get _isNetwork => mode == DominoMode.network;
+
+  /// Длительность выкладывания кости. В тестах её уменьшают.
+  final Duration animationDuration;
 
   /// Один генератор случайных чисел на всю партию: раздача, ИИ и подсказки.
   final Random _rng = Random();
@@ -72,6 +126,9 @@ class DominoController extends ChangeNotifier {
   GameState get state => _state!;
   GameState? get stateOrNull => _state;
   bool get isReady => _state != null;
+
+  /// Стартовая позиция для тестов; в игре всегда раздаётся новая.
+  final GameState? initialState;
 
   bool get isOver =>
       (_state?.isOver ?? false) || _resignedWinner != null;
@@ -107,29 +164,58 @@ class DominoController extends ChangeNotifier {
   int get turn => _state?.turn ?? 0;
   int get ply => _state?.ply ?? 0;
 
+  /// Подходящие ходы в текущей позиции.
+  List<DominoMove> get legalMoves =>
+      isReady ? _rules.getValidMoves(state) : const <DominoMove>[];
+
   DominoTile? selectedTile;
   DominoMove? suggestedMove;
+  String? hintText;
   String? notice;
   String? fatalMessage;
+  TableAnimation? animation;
   bool computerThinking = false;
+  bool waitingForUndo = false;
+  int? incomingUndoPly;
+  int? incomingUndoSeat;
+  int? _deferredUndoPly;
+
+  /// История ходов партии — для показа в одноимённом диалоге.
+  final List<MoveRecord> _records = <MoveRecord>[];
+  List<MoveRecord> get history => List<MoveRecord>.unmodifiable(_records);
 
   /// Снимки состояний перед каждым действием — для отмены (офлайн и против
-  /// компьютера). По сети отмена не работает: у клиента нет чужой руки, чтобы
-  /// восстановить позицию, а у хоста нет согласия клиента.
-  final List<GameState> _undo = <GameState>[];
+  /// компьютера). По сети отмена работает по согласию: запрашиваем у друга.
+  final List<_UndoEntry> _undo = <_UndoEntry>[];
 
   StreamSubscription<NetworkMessage>? _networkSub;
+  Timer? _echoTimer;
+  bool _awaitingEcho = false;
   bool _advancing = false;
   bool _disposed = false;
   int? _resignedWinner;
+  int _animationToken = 0;
 
-  static const _passDelay = Duration(milliseconds: 500);
-  static const _computerPause = Duration(milliseconds: 600);
+  /// Колбэк, который выставляет интерфейс, чтобы спросить ребёнка о согласии
+  /// на отмену хода по сети. Сетевой контроллер не показывает диалог сам.
+  void Function()? onUndoRequested;
 
-  // ---- Настройки ------------------------------------------------------------
+  static const _passDelay = Duration(milliseconds: 450);
+  static const _computerPause = Duration(milliseconds: 550);
+
+  // ---- Настройки -----------------------------------------------------------
 
   bool get hintsEnabled => settings.flag(dominoGameId, 'hints');
   bool get hintButtonEnabled => settings.flag(dominoGameId, 'hintButton');
+
+  void _settingsChanged() {
+    if (!hintsEnabled) {
+      suggestedMove = null;
+      hintText = null;
+      if (notice != null && !waitingForUndo) notice = null;
+    }
+    notifyListeners();
+  }
 
   // ---- Подсказки и интерактивность ------------------------------------------
 
@@ -166,7 +252,7 @@ class DominoController extends ChangeNotifier {
     if (isOver) {
       if (isDraw) return 'Ничья';
       if (winner == mySeat) return 'Ты выиграл!';
-      return mode == DominoMode.local ? 'Партия окончена' : 'Партия окончена';
+      return 'Партия окончена';
     }
     switch (activeSide) {
       case DominoActive.me:
@@ -180,10 +266,15 @@ class DominoController extends ChangeNotifier {
     }
   }
 
+  bool get isAnimating => animation != null;
+
   /// Можно ли взаимодействовать с рукой и столом.
   bool get canInteract {
     if (!isReady || isOver || fatalMessage != null) return false;
     if (computerThinking) return false;
+    if (isAnimating) return false;
+    if (waitingForUndo || incomingUndoPly != null) return false;
+    if (_awaitingEcho) return false;
     if (mode == DominoMode.network && state.turn != mySeat) return false;
     if (mode == DominoMode.computer && state.turn != mySeat) return false;
     return true;
@@ -203,23 +294,32 @@ class DominoController extends ChangeNotifier {
     return state.bazaarCount == 0;
   }
 
-  /// Отмена доступна только офлайн и против компьютера.
+  /// Отмена доступна офлайн и против компьютера, а по сети — по согласию.
+  /// Доступна и после окончания партии: кнопка «Отменить ход» в диалоге
+  /// итога позволяет откатить последнее действие.
   bool get canUndo {
-    if (isOver) return false;
-    if (_isNetwork) return false;
-    if (!isReady) return false;
+    if (!isReady || isAnimating || fatalMessage != null) return false;
+    if (waitingForUndo || incomingUndoPly != null || _awaitingEcho) return false;
+    if (_isNetwork) {
+      // По сети отмена работает только запросом к другу.
+      return network != null && _undo.isNotEmpty && _undo.last.seat == mySeat;
+    }
     if (_undo.isEmpty) return false;
-    if (mode == DominoMode.computer && state.turn != mySeat) return false;
+    if (mode == DominoMode.computer && state.turn != mySeat && !isOver) {
+      return false;
+    }
     return true;
   }
 
   bool get canShowHint {
     if (!canInteract) return false;
+    if (!hintsEnabled) return false;
     if (!hintButtonEnabled) return false;
     return _rules.getValidMoves(state).isNotEmpty;
   }
 
   String nameFor(int seat) {
+    if (seat < 0) return 'Игрок';
     switch (mode) {
       case DominoMode.local:
         return seat == 0 ? 'Игрок 1' : 'Игрок 2';
@@ -237,8 +337,10 @@ class DominoController extends ChangeNotifier {
   void _dealAndAutoStart() {
     _state = _rules.initial(players: 2, random: _rng);
     _undo.clear();
+    _records.clear();
     selectedTile = null;
     suggestedMove = null;
+    hintText = null;
     notice = null;
     _resignedWinner = null;
     fatalMessage = null;
@@ -254,12 +356,19 @@ class DominoController extends ChangeNotifier {
     final starting = _rules.firstTile(state);
     final before = state.copyWith(turn: starting.seat);
     _state = _rules.applyMove(before, starting.move);
+    _records.add(
+      MoveRecord(
+        seat: starting.seat,
+        text: 'открывает партию костью ${starting.tile.label}',
+      ),
+    );
     sounds.play(GameSound.move);
   }
 
   void startLocal() {
     mode = DominoMode.local;
     _dealAndAutoStart();
+
     notifyListeners();
     unawaited(_advance());
   }
@@ -268,6 +377,7 @@ class DominoController extends ChangeNotifier {
     mode = DominoMode.computer;
     difficulty = level;
     _dealAndAutoStart();
+
     notifyListeners();
     unawaited(_advance());
   }
@@ -276,6 +386,7 @@ class DominoController extends ChangeNotifier {
   /// Клиент ждёт первого снимка.
   void startNetwork() {
     mode = DominoMode.network;
+
     if (isHost) {
       _dealAndAutoStart();
       notifyListeners();
@@ -299,6 +410,56 @@ class DominoController extends ChangeNotifier {
     }
   }
 
+  /// Альтернативный старт с готовой позицией — для тестов. Режим остаётся
+  /// тем, что выставил вызывающий (локально или против компьютера).
+  void startLocalWithState(GameState state) {
+    _state = state;
+    _undo.clear();
+    _records.clear();
+    selectedTile = null;
+    suggestedMove = null;
+    hintText = null;
+    notice = null;
+    _resignedWinner = null;
+    fatalMessage = null;
+    computerThinking = false;
+
+    notifyListeners();
+    unawaited(_advance());
+  }
+
+  /// То же, но в режиме против компьютера.
+  void startComputerWithState(GameState state, Difficulty level) {
+    mode = DominoMode.computer;
+    difficulty = level;
+    startLocalWithState(state);
+  }
+
+  // ---- Анимация ------------------------------------------------------------
+
+  Future<void> _animate(TableAnimation next) async {
+    _animationToken++;
+    final token = _animationToken;
+    animation = next;
+    notifyListeners();
+    if (next.duration > Duration.zero) {
+      await Future<void>.delayed(next.duration);
+    }
+    if (_disposed || token != _animationToken) return;
+    animation = null;
+    _promoteDeferredUndo();
+    notifyListeners();
+  }
+
+  /// Запрос отмены, пришедший во время анимации, показываем сразу после неё.
+  void _promoteDeferredUndo() {
+    if (_deferredUndoPly == null || isAnimating) return;
+    incomingUndoPly = _deferredUndoPly;
+    _deferredUndoPly = null;
+    onUndoRequested?.call();
+    notifyListeners();
+  }
+
   // ---- Выбор и ход --------------------------------------------------------
 
   /// Игрок нажал кость в руке. Если кость подходит только к одному концу —
@@ -306,10 +467,11 @@ class DominoController extends ChangeNotifier {
   void tapTile(DominoTile tile) {
     if (!canInteract) return;
     notice = null;
+    hintText = null;
     final sides = state.board.sidesFor(tile);
     if (sides.isEmpty) {
       // Не подходит ни к одному концу — объясним, что делать.
-      notice = _explainNoMatch();
+      notice = _explainNoMatch(tile);
       suggestedMove = null;
       notifyListeners();
       return;
@@ -330,16 +492,8 @@ class DominoController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Игрок нажал на открытый конец цепочки.
-  void placeTile(DominoTile tile, ChainSide side) {
-    if (!canInteract) return;
-    if (!state.board.sidesFor(tile).contains(side)) {
-      notice = 'Кость ${tile.label} не подходит к этому концу.';
-      notifyListeners();
-      return;
-    }
-    unawaited(_play(DominoMove(tile: tile, side: side)));
-  }
+  /// Тап по концу цепочки: ставит выбранную кость.
+  void playAt(ChainSide side) => selectSide(side);
 
   /// Тап по концу цепочки: ставит выбранную кость.
   void selectSide(ChainSide side) {
@@ -350,7 +504,30 @@ class DominoController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    placeTile(tile, side);
+    if (!state.board.sidesFor(tile).contains(side)) {
+      notice = 'Кость ${tile.label} не подходит к этому концу.';
+      notifyListeners();
+      return;
+    }
+    unawaited(_play(DominoMove(tile: tile, side: side)));
+  }
+
+  /// Поставить кость сразу, без выбора — так играет подсказка и тесты.
+  Future<void> playMove(DominoMove move) async {
+    if (!canInteract) return;
+    if (!state.board.sidesFor(move.tile).contains(move.side)) return;
+    if (!state.handOf(state.turn).contains(move.tile)) return;
+    await _play(move);
+  }
+
+  void placeTile(DominoTile tile, ChainSide side) {
+    if (!canInteract) return;
+    if (!state.board.sidesFor(tile).contains(side)) {
+      notice = 'Кость ${tile.label} не подходит к этому концу.';
+      notifyListeners();
+      return;
+    }
+    unawaited(_play(DominoMove(tile: tile, side: side)));
   }
 
   void clearSelection() {
@@ -361,17 +538,20 @@ class DominoController extends ChangeNotifier {
     }
   }
 
-  String _explainNoMatch() {
+  String _explainNoMatch(DominoTile tile) {
     final left = state.board.leftEnd;
     final right = state.board.rightEnd;
+    if (!hintsEnabled) return 'Так ходить нельзя.';
     if (left == null || right == null) {
       return 'Начни цепочку с любой кости.';
     }
     final ends = left == right ? '$left' : '$left и $right';
     if (state.bazaarCount > 0) {
-      return 'Нет подходящей кости к концам $ends. Возьми из базара.';
+      return 'Кость ${tile.label} не подходит к концам $ends. '
+          'Возьми кость из базара.';
     }
-    return 'Нет подходящей кости к концам $ends, а базар пуст — придётся пасовать.';
+    return 'Кость ${tile.label} не подходит к концам $ends, '
+        'а базар уже пуст — ход пропускается.';
   }
 
   // ---- Действия ------------------------------------------------------------
@@ -381,6 +561,7 @@ class DominoController extends ChangeNotifier {
     final before = state;
     if (!before.handOf(before.turn).contains(move.tile)) return;
     if (!before.board.sidesFor(move.tile).contains(move.side)) return;
+    final seat = before.turn;
     if (_isNetwork && !isHost) {
       // Клиент: отправляем ход хосту, ждём снимок. Хост применяет ход сам.
       try {
@@ -392,24 +573,42 @@ class DominoController extends ChangeNotifier {
       }
       selectedTile = null;
       suggestedMove = null;
+      hintText = null;
       notice = null;
-      notifyListeners();
+      _awaitEcho();
       return;
     }
-    _undo.add(before);
+    _remember(before, seat);
     _state = _rules.applyMove(before, move);
+    _records.add(
+      MoveRecord(
+        seat: seat,
+        text: 'ставит ${move.tile.label} ${move.side.label}',
+      ),
+    );
     selectedTile = null;
     suggestedMove = null;
+    hintText = null;
     notice = null;
+    computerThinking = false;
     sounds.play(GameSound.move);
     notifyListeners();
+    await _animate(
+      TableAnimation(
+        kind: TableAnimationKind.place,
+        seat: seat,
+        move: move,
+        duration: animationDuration,
+      ),
+    );
+    if (_disposed) return;
     if (isOver) {
       unawaited(_onWin());
     }
     if (_isNetwork && isHost) {
       _broadcastSnapshot();
     } else if (!isOver) {
-      unawaited(_advance());
+      await _advance();
     }
   }
 
@@ -423,7 +622,7 @@ class DominoController extends ChangeNotifier {
       return;
     }
     if (state.bazaarCount == 0) {
-      notice = 'Базар пуст — придётся пропустить ход.';
+      notice = 'Базар пуст — остаётся пропустить ход.';
       notifyListeners();
       return;
     }
@@ -437,31 +636,38 @@ class DominoController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      notice = 'Берём кость из базара…';
-      notifyListeners();
+      _awaitEcho();
       return;
     }
     final before = state;
     final seat = before.turn;
-    _undo.add(before);
+    _remember(before, seat);
     _state = _rules.drawFromBazaar(before);
     final drawn = _state!.handOf(seat).last;
+    _records.add(MoveRecord(seat: seat, text: 'берёт ${drawn.label} из базара'));
     sounds.play(GameSound.guess);
-    if (_rules.getValidMoves(state).isNotEmpty) {
-      notice = 'Кость ${drawn.label} подошла! Поставь её на стол.';
-    } else if (state.bazaarCount > 0) {
-      notice = 'Кость ${drawn.label} не подходит. Возьми ещё из базара.';
-    } else {
-      notice = 'Кость ${drawn.label} не подходит, а базар пуст — пропускаем ход.';
-    }
     notifyListeners();
+    await _animate(
+      TableAnimation(
+        kind: TableAnimationKind.draw,
+        seat: seat,
+        tile: drawn,
+        duration: animationDuration ~/ 2,
+      ),
+    );
+    if (_disposed) return;
     if (isOver) {
       unawaited(_onWin());
+    }
+    if (_rules.getValidMoves(state).isNotEmpty) {
+      notice = 'Кость ${drawn.label} подошла! Поставь её на стол.';
+      notifyListeners();
+      return;
     }
     if (_isNetwork && isHost) {
       _broadcastSnapshot();
     } else if (!isOver) {
-      unawaited(_advance());
+      await _advance();
     }
   }
 
@@ -488,8 +694,7 @@ class DominoController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      notice = 'Пропускаем ход…';
-      notifyListeners();
+      _awaitEcho();
       return;
     }
     _applyLocalPass();
@@ -501,9 +706,11 @@ class DominoController extends ChangeNotifier {
   void _applyLocalPass() {
     if (!isReady || isOver) return;
     final before = state;
-    _undo.add(before);
+    final seat = before.turn;
+    _remember(before, seat);
     _state = _rules.pass(before);
-    notice = '${nameFor(before.turn)} пропускает ход.';
+    _records.add(MoveRecord(seat: seat, text: 'пропускает ход'));
+    notice = 'Ходов нет — пропускаем ход.';
     notifyListeners();
     if (isOver) {
       unawaited(_onWin());
@@ -554,11 +761,22 @@ class DominoController extends ChangeNotifier {
   Future<void> _computerDraw() async {
     if (!isReady || isOver) return;
     final before = state;
-    _undo.add(before);
+    final seat = before.turn;
+    _remember(before, seat);
     _state = _rules.drawFromBazaar(before);
+    final drawn = _state!.handOf(seat).last;
+    _records.add(MoveRecord(seat: seat, text: 'берёт ${drawn.label} из базара'));
     sounds.play(GameSound.guess);
     notifyListeners();
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await _animate(
+      TableAnimation(
+        kind: TableAnimationKind.draw,
+        seat: seat,
+        tile: drawn,
+        duration: animationDuration ~/ 2,
+      ),
+    );
+    if (_disposed) return;
   }
 
   Future<void> _computerTurn() async {
@@ -572,22 +790,22 @@ class DominoController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final move = DominoAI.findBestMove(state, state.turn, difficulty, _rng);
-    if (move == null) {
-      // Ходов нет — _advance сам разберётся (возьмёт из базара или пропустит).
-      computerThinking = false;
-      notifyListeners();
-      return;
+    var draws = 0;
+    while (!_disposed && !isOver) {
+      final moves = _rules.getValidMoves(state);
+      if (moves.isNotEmpty) {
+        computerThinking = false;
+        final move = DominoAI.findBestMove(state, state.turn, difficulty, _rng) ??
+            moves.first;
+        await _play(move);
+        return;
+      }
+      if (state.bazaarCount == 0 || draws++ > 20) break;
+      await _computerDraw();
+      if (_disposed) return;
     }
-    final before = state;
-    _undo.add(before);
-    _state = _rules.applyMove(before, move);
     computerThinking = false;
-    sounds.play(GameSound.move);
     notifyListeners();
-    if (isOver) {
-      unawaited(_onWin());
-    }
   }
 
   // ---- Подсказка -----------------------------------------------------------
@@ -595,7 +813,8 @@ class DominoController extends ChangeNotifier {
   /// Предлагает хороший ход: подсвечивает кость и конец, не делая ход за
   /// ребёнка.
   void showHint() {
-    if (!canInteract || !hintButtonEnabled) return;
+    if (!canInteract || !hintsEnabled) return;
+    notice = null;
     final move = DominoAI.findBestMove(
       state,
       state.turn,
@@ -603,16 +822,47 @@ class DominoController extends ChangeNotifier {
       _rng,
     );
     if (move == null) {
-      notice = state.bazaarCount > 0
-          ? 'Подходящих костей нет — возьми из базара.'
-          : 'Ходов нет — придётся пропустить.';
       suggestedMove = null;
+      selectedTile = null;
+      hintText = state.bazaarCount > 0
+          ? 'Подходящей кости нет — возьми кость из базара.'
+          : 'Ходов нет — придётся пропустить ход.';
       notifyListeners();
       return;
     }
     suggestedMove = move;
     selectedTile = move.tile;
-    notice = 'Попробуй поставить ${move.tile.label} ${move.side.label}.';
+    hintText = _describeHint(move);
+    notifyListeners();
+  }
+
+  String _describeHint(DominoMove move) {
+    final board = state.board.place(move.tile, move.side);
+    final ends = board.leftEnd == board.rightEnd
+        ? '${board.leftEnd}'
+        : '${board.leftEnd} и ${board.rightEnd}';
+    final rest = state.handOf(handSeat).length - 1;
+    final left = rest == 0
+        ? ' Это последняя кость — и победа!'
+        : (rest == 1 ? ' Останется одна кость.' : '');
+    if (state.board.isEmpty) {
+      return 'Поставь ${move.tile.label} — с неё начнётся цепочка.$left';
+    }
+    return 'Поставь ${move.tile.label} ${move.side.label}: '
+        'после этого открытыми будут $ends.$left';
+  }
+
+  void clearHint() {
+    if (suggestedMove == null && hintText == null) return;
+    suggestedMove = null;
+    hintText = null;
+    if (selectedTile != null) selectedTile = null;
+    notifyListeners();
+  }
+
+  void clearNotice() {
+    if (notice == null) return;
+    notice = null;
     notifyListeners();
   }
 
@@ -620,12 +870,65 @@ class DominoController extends ChangeNotifier {
 
   void undo() {
     if (!canUndo) return;
-    if (_undo.isEmpty) return;
-    final prev = _undo.removeLast();
-    _state = prev;
+    if (_isNetwork) {
+      waitingForUndo = true;
+      notice = null;
+      try {
+        network!.service.send(
+          NetworkMessage('undoRequest', {'ply': state.ply}),
+        );
+      } catch (_) {
+        waitingForUndo = false;
+        fatalMessage = 'Связь потеряна.';
+      }
+      notifyListeners();
+      return;
+    }
+    final entry = _undo.last;
+    _restore(entry);
+  }
+
+  void _restore(_UndoEntry entry) {
+    _state = entry.state;
+    while (_undo.isNotEmpty && _undo.last != entry) {
+      _undo.removeLast();
+    }
+    if (_undo.isNotEmpty) _undo.removeLast();
+    final keep = entry.records.clamp(0, _records.length).toInt();
+    _records.removeRange(keep, _records.length);
     selectedTile = null;
     suggestedMove = null;
-    notice = 'Ход отменён';
+    hintText = null;
+    notice = null;
+    animation = null;
+    computerThinking = false;
+    waitingForUndo = false;
+    incomingUndoPly = null;
+    incomingUndoSeat = null;
+    _deferredUndoPly = null;
+    _awaitingEcho = false;
+    _resignedWinner = null;
+    notifyListeners();
+    unawaited(_advance());
+  }
+
+  /// Ответ на просьбу друга об отмене хода по сети.
+  void respondUndo(bool accepted) {
+    final ply = incomingUndoPly;
+    incomingUndoPly = null;
+    incomingUndoSeat = null;
+    if (ply == null) return;
+    if (!_isNetwork) return;
+    try {
+      network!.service.send(
+        NetworkMessage('undoResponse', {'ply': ply, 'accepted': accepted}),
+      );
+      notice = accepted
+          ? 'Возвращаемся на ход назад…'
+          : 'Хорошо, продолжаем партию.';
+    } catch (_) {
+      fatalMessage = 'Связь потеряна.';
+    }
     notifyListeners();
   }
 
@@ -634,18 +937,33 @@ class DominoController extends ChangeNotifier {
   /// Сдаться. Доступно только против компьютера и по сети — вдвоём на одном
   /// устройстве сдаваться незачем, можно просто выйти в меню.
   void resign() {
-    if (isOver) return;
+    if (!isReady || isOver || fatalMessage != null) return;
     if (mode == DominoMode.local) return;
-    final winnerSeat = opponentSeat;
-    _resignedWinner = winnerSeat;
     if (_isNetwork) {
       try {
         network!.service.send(const NetworkMessage('resign'));
       } catch (_) {
         // Связь уже могла пропасть — всё равно фиксируем итог.
       }
+      _resignedWinner = opponentSeat;
+      notice = 'Ты сдался. Спасибо за игру!';
+      notifyListeners();
+      unawaited(_onWin());
+      return;
     }
+    // Против компьютера: победа достаётся сопернику.
+    _resignedWinner = opponentSeat;
+    computerThinking = false;
+    animation = null;
+    notifyListeners();
     unawaited(_onWin());
+  }
+
+  void _remember(GameState state, int seat) {
+    _undo.add(
+      _UndoEntry(state: state, seat: seat, records: _records.length),
+    );
+    if (_undo.length > 20) _undo.removeAt(0);
   }
 
   // ---- Победа --------------------------------------------------------------
@@ -657,8 +975,10 @@ class DominoController extends ChangeNotifier {
     // выиграл» — всегда. В сети и против компьютера — только если победил
     // мой seat.
     final iWon = mode == DominoMode.local ? true : winner == mySeat;
-    sounds.play(resultSoundName(draw: draw, local: mode == DominoMode.local, iWon: iWon));
-    await settings.recordGame(won: iWon);
+    sounds.play(
+      resultSoundName(draw: draw, local: mode == DominoMode.local, iWon: iWon),
+    );
+    unawaited(settings.recordGame(won: iWon));
     notifyListeners();
   }
 
@@ -687,10 +1007,26 @@ class DominoController extends ChangeNotifier {
     if (state.turn != 1) return; // не клиентский ход
     try {
       final move = parseMove(data);
-      _undo.add(state);
+      _remember(state, 1);
       _state = _rules.applyMove(state, move);
+      _records.add(
+        MoveRecord(
+          seat: 1,
+          text: 'ставит ${move.tile.label} ${move.side.label}',
+        ),
+      );
       sounds.play(GameSound.move);
       notifyListeners();
+      unawaited(
+        _animate(
+          TableAnimation(
+            kind: TableAnimationKind.place,
+            seat: 1,
+            move: move,
+            duration: animationDuration,
+          ),
+        ),
+      );
       if (isOver) {
         unawaited(_onWin());
       }
@@ -709,10 +1045,22 @@ class DominoController extends ChangeNotifier {
       return;
     }
     try {
-      _undo.add(state);
+      _remember(state, 1);
       _state = _rules.drawFromBazaar(state);
+      final drawn = _state!.handOf(1).last;
+      _records.add(MoveRecord(seat: 1, text: 'берёт ${drawn.label} из базара'));
       sounds.play(GameSound.guess);
       notifyListeners();
+      unawaited(
+        _animate(
+          TableAnimation(
+            kind: TableAnimationKind.draw,
+            seat: 1,
+            tile: drawn,
+            duration: animationDuration ~/ 2,
+          ),
+        ),
+      );
       if (isOver) {
         unawaited(_onWin());
       }
@@ -726,8 +1074,9 @@ class DominoController extends ChangeNotifier {
     if (!_isNetwork || !isHost || !isReady) return;
     if (state.turn != 1) return;
     try {
-      _undo.add(state);
+      _remember(state, 1);
       _state = _rules.pass(state);
+      _records.add(MoveRecord(seat: 1, text: 'пропускает ход'));
       notifyListeners();
       if (isOver) {
         unawaited(_onWin());
@@ -738,16 +1087,45 @@ class DominoController extends ChangeNotifier {
     }
   }
 
+  void _hostReceiveUndoRequest(Map<String, Object?> data) {
+    if (!_isNetwork || !isHost || !isReady) return;
+    final ply = data['ply'];
+    if (ply is! int) return;
+    // Хост хранит свои снимки и снимки клиента; согласие не нужно — отмена
+    // локальна к хосту тоже, но по сети мы просто применяем её у себя и шлём
+    // снимок. Согласие упрощено: хост разрешает, если ход клиента.
+    if (_undo.isEmpty || _undo.last.seat != 1) {
+      try {
+        network!.service.send(
+          NetworkMessage('undoResponse', {'ply': ply, 'accepted': false}),
+        );
+      } catch (_) {}
+      return;
+    }
+    final entry = _undo.last;
+    _restore(entry);
+    try {
+      network!.service.send(
+        NetworkMessage('undoResponse', {'ply': ply, 'accepted': true}),
+      );
+    } catch (_) {}
+    _broadcastSnapshot();
+  }
+
   // ---- Сеть: клиент --------------------------------------------------------
 
   /// Клиент получил снимок от хоста: просто заменяем состояние.
   void _clientApplySnapshot(Map<String, Object?> data) {
     if (!_isNetwork || isHost) return;
     try {
-      _state = parseSnapshot(data);
+      final snapshot = parseSnapshot(data);
+      _state = snapshot;
       selectedTile = null;
       suggestedMove = null;
+      hintText = null;
       notice = null;
+      _awaitingEcho = false;
+      _echoTimer?.cancel();
       notifyListeners();
       if (isOver) {
         unawaited(_onWin());
@@ -758,6 +1136,18 @@ class DominoController extends ChangeNotifier {
   }
 
   // ---- Сеть: общее ---------------------------------------------------------
+
+  void _awaitEcho() {
+    _awaitingEcho = true;
+    _echoTimer?.cancel();
+    _echoTimer = Timer(const Duration(seconds: 6), () {
+      if (_disposed || !_awaitingEcho) return;
+      _awaitingEcho = false;
+      notice = 'Хост не отвечает. Проверь Wi-Fi — партия может быть на паузе.';
+      notifyListeners();
+    });
+    notifyListeners();
+  }
 
   void _onNetworkEvent(NetworkMessage event) {
     if (_disposed) return;
@@ -778,21 +1168,55 @@ class DominoController extends ChangeNotifier {
           _hostReceivePass();
         }
         break;
+      case 'undoRequest':
+        // Запрос от друга об отмене — покажем диалог через колбэк.
+        if (isHost) {
+          _hostReceiveUndoRequest(event.data);
+        } else {
+          final ply = event.data['ply'];
+          if (ply is! int) return;
+          if (isAnimating) {
+            _deferredUndoPly = ply;
+            return;
+          }
+          incomingUndoPly = ply;
+          incomingUndoSeat = 0;
+          onUndoRequested?.call();
+          notifyListeners();
+        }
+        break;
+      case 'undoResponse':
+        final accepted = event.data['accepted'] == true;
+        waitingForUndo = false;
+        _awaitingEcho = false;
+        _echoTimer?.cancel();
+        notice = accepted
+            ? 'Ход отменён — возвращаемся назад.'
+            : 'Друг решил продолжить без отмены хода.';
+        notifyListeners();
+        break;
       case 'resign':
         // Соперник сдался — победа за этим устройством.
         _resignedWinner = mySeat;
         unawaited(_onWin());
         break;
       case 'disconnected':
-        fatalMessage = 'Связь потеряна. Вернись в меню и попробуй снова.';
-        notifyListeners();
+        _awaitingEcho = false;
+        _echoTimer?.cancel();
+        if (!isOver) {
+          fatalMessage = 'Связь потеряна. Вернись в меню и попробуй снова.';
+          animation = null;
+          notifyListeners();
+        }
         break;
       case 'desync':
         _desync('Партия рассинхронизировалась');
         break;
       case 'error':
         final msg = event.data['message'];
-        fatalMessage = msg is String ? msg : 'Связь потеряна';
+        _awaitingEcho = false;
+        _echoTimer?.cancel();
+        notice = msg is String ? msg : 'Так ходить нельзя.';
         notifyListeners();
         break;
     }
@@ -800,6 +1224,9 @@ class DominoController extends ChangeNotifier {
 
   void _desync(String reason) {
     fatalMessage = reason.isEmpty ? 'Партия рассинхронизировалась' : reason;
+    _awaitingEcho = false;
+    _echoTimer?.cancel();
+    animation = null;
     notifyListeners();
   }
 
@@ -808,7 +1235,10 @@ class DominoController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _echoTimer?.cancel();
+    _animationToken++;
     _networkSub?.cancel();
+    settings.removeListener(_settingsChanged);
     super.dispose();
   }
 }

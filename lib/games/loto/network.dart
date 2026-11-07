@@ -6,14 +6,20 @@ import 'engine/model.dart';
 /// его не меняют.
 const lotoGameId = 'loto';
 
+/// Ключ, под которым выбранный режим победы лежит в настройках. Хост выбирает
+/// его на отдельном экране перед лобби (`preNetwork`), и тот же ключ читает
+/// [lotoOptions] при сборке рукопожатия.
+const lotoWinModeKey = 'winMode';
+
 /// Что игра рассказывает сопернику о себе в рукопожатии. Для лото это три
-/// переключателя отображения и озвучки. Каждое устройство рисует по своим
-/// настройкам, но карта проверяется, чтобы чужое лобби не пустило в партию
-/// неразборчивые данные.
+/// переключателя отображения и озвучки плюс режим победы, который выбрал хост.
+/// Каждое устройство рисует по своим настройкам, но карта проверяется, чтобы
+/// чужое лобби не пустило в партию неразборчивые данные.
 Map<String, Object?> lotoOptions(SettingsController settings) => {
   'hints': settings.flag(lotoGameId, 'hints'),
   'hintButton': settings.flag(lotoGameId, 'hintButton'),
   'voice': settings.flag(lotoGameId, 'voice'),
+  'winMode': settings.gameString(lotoGameId, lotoWinModeKey, WinMode.row.name),
 };
 
 /// Опции лото после разбора. Значения — только то, что игра умеет.

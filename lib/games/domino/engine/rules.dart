@@ -212,6 +212,101 @@ class DominoRules {
     return from;
   }
 
+  /// Применяет ход соперника, пришедший по сети.
+  ///
+  /// Доска у всех одинаковая, поэтому ход виден всем. Содержимое чужих рук на
+  /// этом устройстве неизвестно: очередь, размеры рук и итог приходят от хоста.
+  GameState applyNetworkMove(
+    GameState state,
+    int seat,
+    DominoMove move, {
+    required int ply,
+    required int turn,
+    required List<int> sizes,
+    required int bazaarCount,
+    GameResult? result,
+  }) {
+    final hands = _copyHands(state);
+    final index = hands[seat].indexOf(move.tile);
+    if (index >= 0) hands[seat].removeAt(index);
+    return state.copyWith(
+      hands: hands,
+      sizes: sizes,
+      board: state.board.place(move.tile, move.side),
+      bazaarTotal: bazaarCount,
+      turn: turn,
+      ply: ply,
+      result: result,
+    );
+  }
+
+  /// Применяет взятие из базара, пришедшее по сети.
+  ///
+  /// Кость знает только тот, кто её взял, поэтому [tile] передаётся лишь в его
+  /// сообщении.
+  GameState applyNetworkDraw(
+    GameState state,
+    int seat, {
+    DominoTile? tile,
+    required int ply,
+    required List<int> sizes,
+    required int bazaarCount,
+    required int turn,
+    GameResult? result,
+  }) {
+    final hands = _copyHands(state);
+    if (tile != null && !hands[seat].contains(tile)) hands[seat].add(tile);
+    final bazaar = state.bazaar.contains(tile)
+        ? (List<DominoTile>.of(state.bazaar)..remove(tile))
+        : state.bazaar;
+    return state.copyWith(
+      hands: hands,
+      sizes: sizes,
+      bazaar: bazaar,
+      bazaarTotal: bazaarCount,
+      turn: turn,
+      ply: ply,
+      result: result,
+    );
+  }
+
+  /// Применяет пропуск хода, пришедший по сети.
+  GameState applyNetworkPass(
+    GameState state, {
+    required int ply,
+    required int turn,
+    GameResult? result,
+  }) => state.copyWith(turn: turn, ply: ply, result: result);
+
+  /// Игрок вышел из партии: его кости уходят в базар, а ход переходит дальше.
+  GameState abandonSeat(GameState state, int seat) {
+    if (!state.isActive(seat)) return state;
+    final hands = _copyHands(state);
+    final moved = hands[seat];
+    hands[seat] = <DominoTile>[];
+    final bazaar = [...state.bazaar, ...moved];
+    final inactive = {...state.inactive, seat};
+    final next = state.copyWith(
+      hands: hands,
+      bazaar: bazaar,
+      inactive: inactive,
+      turn: state.turn == seat
+          ? nextActiveSeat(state.playerCount, inactive, seat)
+          : state.turn,
+      result: null,
+    );
+    return settle(next);
+  }
+
+  /// Следующее активное место, когда состав игроков уже изменился.
+  int nextActiveSeat(int playerCount, Set<int> inactive, int from) {
+    for (var step = 1; step <= playerCount; step++) {
+      final candidate = (from + step) % playerCount;
+      if (!inactive.contains(candidate)) return candidate;
+    }
+    return from;
+  }
+
   GameResult? _resultFor(GameState state) {
     // Если остался один игрок, партия заканчивается его победой.
     if (state.activePlayers <= 1) {

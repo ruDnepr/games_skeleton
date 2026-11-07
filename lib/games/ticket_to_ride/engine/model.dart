@@ -242,6 +242,7 @@ class TtrAction {
     this.routeIndex,
     this.faceUpIndex,
     this.keepIndices = const [],
+    this.locomotiveCount,
   });
 
   /// Тип действия: `'claim'`, `'drawFaceUp'`, `'drawDeck'`,
@@ -251,8 +252,18 @@ class TtrAction {
   final int? faceUpIndex;
   final List<int> keepIndices;
 
-  factory TtrAction.claim(int routeIndex) =>
-      TtrAction._(kind: 'claim', routeIndex: routeIndex);
+  /// Сколько локомотивов потратить на занятие маршрута. `null` — правила
+  /// списывают автоматически: сначала карты нужного цвета, потом локомотивы.
+  /// Игрок через диалог может решить иначе: например, добить локомотивами,
+  /// а цветные карты приберечь. ИИ и сеть передают `null`, когда выбор не нужен.
+  final int? locomotiveCount;
+
+  factory TtrAction.claim(int routeIndex, {int? locomotiveCount}) =>
+      TtrAction._(
+        kind: 'claim',
+        routeIndex: routeIndex,
+        locomotiveCount: locomotiveCount,
+      );
   factory TtrAction.drawFaceUp(int faceUpIndex) =>
       TtrAction._(kind: 'drawFaceUp', faceUpIndex: faceUpIndex);
   // `drawDeck` и `drawDestinations` — без параметров, поэтому можно сделать
@@ -272,6 +283,7 @@ class TtrAction {
           throw StateError('Действие claim без номера маршрута');
         }
         json['routeIndex'] = routeIndex;
+        if (locomotiveCount != null) json['locomotiveCount'] = locomotiveCount;
       case 'drawFaceUp':
         if (faceUpIndex == null) {
           throw StateError('Действие drawFaceUp без номера карты');
@@ -292,7 +304,10 @@ class TtrAction {
       throw const FormatException('Действие не распознано: тип');
     }
     return switch (kind) {
-      'claim' => TtrAction.claim(_readInt(json, 'routeIndex')),
+      'claim' => TtrAction.claim(
+        _readInt(json, 'routeIndex'),
+        locomotiveCount: _readOptionalInt(json, 'locomotiveCount'),
+      ),
       'drawFaceUp' => TtrAction.drawFaceUp(_readInt(json, 'index')),
       'drawDeck' => const TtrAction.drawDeck(),
       'drawDestinations' => const TtrAction.drawDestinations(),
@@ -305,6 +320,15 @@ class TtrAction {
 
   static int _readInt(Map<String, Object?> json, String key) {
     final value = json[key];
+    if (value is! int || value < 0) {
+      throw FormatException('Действие не распознано: $key');
+    }
+    return value;
+  }
+
+  static int? _readOptionalInt(Map<String, Object?> json, String key) {
+    final value = json[key];
+    if (value == null) return null;
     if (value is! int || value < 0) {
       throw FormatException('Действие не распознано: $key');
     }

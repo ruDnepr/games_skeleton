@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -11,8 +12,47 @@ import 'engine/model.dart';
 import 'engine/rules.dart';
 import 'network.dart';
 
-/// Режим партии лото.
-enum LotoMode { computer, twoPlayers, network }
+/// Режимы партии лото на одном устройстве. Сетевая игра — отдельный режим
+/// [LotoMode.network], в который контроллер переходит при получении
+/// [NetworkSession].
+///
+/// Режимы повторяют оригинальное «Лото для Дианы»:
+/// * [computerHost] — компьютер сам тянет бочонки и играет за соперника;
+/// * [twoPlayers] — две карточки на одном устройстве, бочонки тянет компьютер;
+/// * [humanHost] — взрослый тянет бочонки кнопкой, ребёнок закрывает числа;
+/// * [network] — хост тянет бочонки и объявляет их всем участникам.
+enum LotoMode {
+  computerHost(
+    title: 'Ведущий-компьютер',
+    subtitle: 'Компьютер тянет бочонки и играет за соперника',
+  ),
+  twoPlayers(
+    title: 'Два игрока',
+    subtitle: 'Две карточки рядом, бочонки тянет компьютер',
+  ),
+  humanHost(
+    title: 'Ведущий-человек',
+    subtitle: 'Бочонки тянет взрослый, ребёнок закрывает числа',
+  ),
+  network(
+    title: 'Игра по Wi-Fi',
+    subtitle: 'Хост тянет бочонки и объявляет их всем',
+  );
+
+  const LotoMode({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  /// В этом режиме есть компьютерный соперник, который сам закрывает числа.
+  bool get hasComputerRival => this == LotoMode.computerHost;
+
+  /// В этом режиме на одном устройстве играют двое: у каждого своя карточка.
+  bool get hasSecondCard => this != LotoMode.humanHost;
+
+  /// В этом режиме бочонок достаёт человек, а не таймер.
+  bool get needsManualDraw => this == LotoMode.humanHost;
+}
 
 /// Фаза партии: идёт или окончена.
 enum LotoPhase { playing, over }
@@ -21,13 +61,70 @@ enum LotoPhase { playing, over }
 /// клиент — `client`; в режиме двух игроков — `p1` и `p2`.
 const localHostPlayerId = 'me';
 
+/// Всё, что нужно знать перед раздачей карточек.
+///
+/// Повторяет оригинальный `GameSetup`: режим, режим победы, имена игроков и
+/// тайминги компьютерного ведущего. Тесты подставляют свои задержки и
+/// фиксированный `seed`, чтобы партия была детерминированной.
+class GameSetup {
+  const GameSetup({
+    required this.mode,
+    this.winMode = WinMode.row,
+    this.playerName = 'Диана',
+    this.opponentName = 'Компьютер',
+    this.drawDelay = const Duration(milliseconds: 3800),
+    this.rivalReaction = const Duration(milliseconds: 1100),
+    this.firstDrawDelay = const Duration(milliseconds: 900),
+    this.seed,
+  });
+
+  final LotoMode mode;
+  final WinMode winMode;
+  final String playerName;
+
+  /// Имя второго игрока: компьютерного соперника или соседа по устройству.
+  final String opponentName;
+
+  /// Пауза между бочонками у компьютера-ведущего.
+  final Duration drawDelay;
+
+  /// Сколько «думает» компьютерный соперник перед закрытием числа.
+  final Duration rivalReaction;
+
+  final Duration firstDrawDelay;
+
+  /// Задаётся тестами: с ним карточки и мешок всегда одинаковые.
+  final int? seed;
+
+  GameSetup copyWith({
+    LotoMode? mode,
+    WinMode? winMode,
+    String? playerName,
+    String? opponentName,
+    Duration? drawDelay,
+    Duration? rivalReaction,
+    Duration? firstDrawDelay,
+    int? seed,
+  }) => GameSetup(
+    mode: mode ?? this.mode,
+    winMode: winMode ?? this.winMode,
+    playerName: playerName ?? this.playerName,
+    opponentName: opponentName ?? this.opponentName,
+    drawDelay: drawDelay ?? this.drawDelay,
+    rivalReaction: rivalReaction ?? this.rivalReaction,
+    firstDrawDelay: firstDrawDelay ?? this.firstDrawDelay,
+    seed: seed ?? this.seed,
+  );
+}
+
 /// Контроллер партии лото. Содержит состояние, историю, звук, голос ведущего
 /// и сеть; интерфейс только рисует то, что контроллер ему отдаёт, и зовёт его
 /// методы.
 ///
 /// Один и тот же контроллер ведёт партию против компьютера, вдвоём на одном
-/// устройстве и по сети: различия собраны в нескольких ветках, а правила и
-/// история общие. Так расхождения между режимами быть не может.
+/// устройстве, с ведущим-человеком и по сети: различия собраны в нескольких
+/// ветках, а правила и история общие. Так расхождения между режимами быть не
+/// может. Повторяет оригинальный `LotoRoundNotifier`.
 class LotoController extends ChangeNotifier {
   LotoController({
     required this.settings,
@@ -50,7 +147,7 @@ class LotoController extends ChangeNotifier {
   final NetworkSession? network;
   late final bool isHost;
 
-  LotoMode mode = LotoMode.computer;
+  LotoMode mode = LotoMode.computerHost;
   LotoPhase phase = LotoPhase.playing;
 
   /// Режим победы, выбранный на экране старта. У сетевой игры его сообщает
@@ -61,11 +158,16 @@ class LotoController extends ChangeNotifier {
   /// тапать можно оба поля; мы держим «своего» только для подсказки и сдачи.
   String myPlayerId = localHostPlayerId;
 
+  /// Текущая раздача. Карточки и мешок — внутри.
   LotoGame game = LotoGame.start(
     players: const [],
     winMode: WinMode.row,
     bag: BarrelBag.empty(),
   );
+
+  /// Настройки текущей партии: режим, имена, тайминги. Нужны для отмены и
+  /// новой партии с теми же параметрами.
+  GameSetup setup = const GameSetup(mode: LotoMode.computerHost);
 
   /// Снимки партии на начало каждого вытягивания — для отмены.
   final List<LotoGame> _history = [];
@@ -75,39 +177,36 @@ class LotoController extends ChangeNotifier {
   Set<int> get hintHighlight => _hintHighlight;
 
   /// Короткая подсказка для ребёнка: «Этот бочонок ещё в мешке».
-  String? status;
-  bool get hasStatus => status != null && status!.isNotEmpty;
+  String? notice;
+  bool noticeWarning = false;
+  bool get hasNotice => notice != null && notice!.isNotEmpty;
 
   StreamSubscription<NetworkMessage>? _networkSub;
+  Timer? _drawTimer;
   Timer? _rivalTimer;
-  Timer? _statusTimer;
+  Timer? _noticeTimer;
   FlutterTts? _tts;
   bool _ttsReady = false;
   bool _disposed = false;
   bool _recorded = false;
+  bool _resultPlayed = false;
 
   // ---- Настройки ------------------------------------------------------------
-
   bool get hintsEnabled => settings.flag(lotoGameId, 'hints');
   bool get hintButtonEnabled => settings.flag(lotoGameId, 'hintButton');
   bool get voiceEnabled => settings.flag(lotoGameId, 'voice');
 
   // ---- Удобные геттеры для интерфейса ---------------------------------------
-
   Barrel? get lastBarrel => game.lastBarrel;
   int get barrelsLeft => game.barrelsLeft;
   bool get isOver => phase == LotoPhase.over || game.isOver;
   bool get isBagEmpty => game.isBagEmpty;
   LotoPlayer? get winner => game.winner;
   List<int> get drawn => game.drawn;
+  bool get started => game.players.isNotEmpty;
 
   LotoPlayer? get me => game.playerById(myPlayerId);
 
-  LotoCard? get myCard => me?.card;
-  Set<int> get myClosed => me?.closed ?? const <int>{};
-
-  /// Все игроки, кроме меня. В двух-игроках здесь будет второй человек, в
-  /// режиме против компьютера — соперник, в сети — друг.
   List<LotoPlayer> get others =>
       [for (final player in game.players) if (player.id != myPlayerId) player];
 
@@ -137,13 +236,13 @@ class LotoController extends ChangeNotifier {
     );
   }
 
-  /// Можно ли тянуть бочонок с кнопки.
-  bool get canDraw {
+  /// Кнопка «Вытянуть бочонок» в режиме, где ведущий — человек, или в сети
+  /// для хоста.
+  bool get canDrawManually {
     if (phase != LotoPhase.playing) return false;
-    if (game.isBagEmpty) return false;
-    if (game.players.isEmpty) return false;
-    if (mode == LotoMode.network && !isHost) return false;
-    return true;
+    if (game.isBagEmpty || game.players.isEmpty) return false;
+    if (mode == LotoMode.network) return isHost;
+    return mode.needsManualDraw;
   }
 
   /// Можно ли вообще играть: партия идёт и не ждёт никого по сети.
@@ -152,7 +251,7 @@ class LotoController extends ChangeNotifier {
   /// Можно ли отменить последний бочонок.
   bool get canUndo {
     if (phase != LotoPhase.playing) return false;
-    if (mode == LotoMode.network && !isHost) return false;
+    if (mode == LotoMode.network) return isHost && _history.isNotEmpty;
     return _history.isNotEmpty;
   }
 
@@ -161,60 +260,87 @@ class LotoController extends ChangeNotifier {
   bool get canResign =>
       phase == LotoPhase.playing &&
       mode != LotoMode.twoPlayers &&
+      mode != LotoMode.humanHost &&
       game.players.isNotEmpty;
+
+  /// Победил ли игрок за этим устройством. В режиме двух игроков всегда true:
+  /// кто-то из своих закрыл первым.
+  bool get iWon {
+    final winner = game.winner;
+    if (winner == null) return false;
+    if (mode == LotoMode.twoPlayers) return true;
+    return winner.id == myPlayerId;
+  }
 
   // ---- Старт партий --------------------------------------------------------
 
-  /// Партия против компьютера: человек тянет бочонок, соперник сам закрывает
-  /// своё число через короткую паузу.
-  void startComputer({WinMode mode = WinMode.row}) {
-    this.mode = LotoMode.computer;
-    winMode = mode;
-    final me = LotoPlayer(
-      id: localHostPlayerId,
-      name: settings.nickname,
-      card: LotoCard.generate(),
-      isHost: true,
-    );
-    final rival = LotoPlayer(
-      id: 'rival',
-      name: 'Компьютер',
-      card: LotoCard.generate(),
-      isComputer: true,
-    );
+  /// Раздаёт карточки и начинает партию по настрою [setup].
+  ///
+  /// В сетевом режиме [start] не используется: там хост раздаёт карточки сам,
+  /// а клиент ждёт снимок. Для сети предназначен [startNetwork].
+  void start(GameSetup setup, {Random? random}) {
+    _cancelTimers();
+    _history.clear();
+    _hintHighlight = const {};
+    _recorded = false;
+    _resultPlayed = false;
+    notice = null;
+    noticeWarning = false;
+    this.setup = setup;
+    mode = setup.mode;
+    winMode = setup.winMode;
     myPlayerId = localHostPlayerId;
-    _beginGame(LotoGame.start(players: [me, rival], winMode: mode));
+    phase = LotoPhase.playing;
+    final rng = random ?? (setup.seed == null ? Random() : Random(setup.seed));
+    final players = <LotoPlayer>[
+      LotoPlayer(
+        id: localHostPlayerId,
+        name: setup.playerName,
+        card: LotoCard.generate(random: rng),
+        isHost: setup.mode.needsManualDraw,
+      ),
+      if (setup.mode.hasSecondCard)
+        LotoPlayer(
+          id: setup.mode.hasComputerRival ? 'rival' : 'friend',
+          name: setup.opponentName,
+          card: LotoCard.generate(random: rng),
+          isComputer: setup.mode.hasComputerRival,
+        ),
+    ];
+    game = LotoGame.start(players: players, winMode: setup.winMode, random: rng);
+    sounds.play(GameSound.guess);
+    notifyListeners();
+    _scheduleDraw(setup.firstDrawDelay);
   }
 
-  /// Двое на одном устройстве: обе карточки видны, тапать может каждый.
-  void startTwoPlayers({WinMode mode = WinMode.row}) {
-    this.mode = LotoMode.twoPlayers;
-    winMode = mode;
-    final p1 = LotoPlayer(
-      id: 'p1',
-      name: settings.nickname,
-      card: LotoCard.generate(),
-      isHost: true,
-    );
-    final p2 = LotoPlayer(
-      id: 'p2',
-      name: 'Игрок 2',
-      card: LotoCard.generate(),
-    );
-    myPlayerId = 'p1';
-    _beginGame(LotoGame.start(players: [p1, p2], winMode: mode));
+  /// Новая партия с теми же настройками.
+  void restart() {
+    if (mode == LotoMode.network) {
+      playAgain();
+      return;
+    }
+    start(setup);
+  }
+
+  /// Останавливает таймеры, когда экран партии закрыли: компьютер не должен
+  /// тянуть бочонки за спиной у ребёнка.
+  void stop() {
+    _cancelTimers();
   }
 
   /// Сетевая партия. Хост раздаёт карточки и шлёт клиенту снимок, клиент
   /// ждёт этот снимок, чтобы узнать свою карточку.
-  void startNetwork({WinMode mode = WinMode.row}) {
+  void startNetwork({WinMode? mode}) {
+    final winMode = mode ?? this.winMode;
     this.mode = LotoMode.network;
-    winMode = mode;
+    this.winMode = winMode;
     phase = LotoPhase.playing;
     _history.clear();
     _hintHighlight = const {};
     _recorded = false;
-    status = null;
+    _resultPlayed = false;
+    notice = null;
+    noticeWarning = false;
     if (isHost) {
       myPlayerId = 'host';
       final host = LotoPlayer(
@@ -228,7 +354,7 @@ class LotoController extends ChangeNotifier {
         name: network?.peerName ?? 'Друг',
         card: LotoCard.generate(),
       );
-      game = LotoGame.start(players: [host, peer], winMode: mode);
+      game = LotoGame.start(players: [host, peer], winMode: winMode);
       // Отправляем клиенту снимок — без него он не знает свою карточку.
       // Небольшая задержка, чтобы клиент успел открыть экран и подписаться.
       Future<void>.delayed(const Duration(milliseconds: 350), () {
@@ -240,64 +366,62 @@ class LotoController extends ChangeNotifier {
       // Снимок придёт сообщением `event` — пока покажем заглушку.
       game = LotoGame.start(
         players: const [],
-        winMode: mode,
+        winMode: winMode,
         bag: BarrelBag.empty(),
       );
-      status = 'Ждём, пока ведущий раздаст карточки…';
+      notice = 'Ждём, пока ведущий раздаст карточки…';
     }
     notifyListeners();
   }
 
-  void _beginGame(LotoGame start) {
-    phase = LotoPhase.playing;
-    game = start;
-    _history.clear();
-    _hintHighlight = const {};
-    _recorded = false;
-    status = null;
-    notifyListeners();
-  }
-
-  /// Новая партия с теми же настройками.
+  /// Новая партия (для экрана «Играть снова» и сетевой «Ещё партия»).
   void playAgain() {
     _rivalTimer?.cancel();
-    _statusTimer?.cancel();
+    _noticeTimer?.cancel();
     _hintHighlight = const {};
-    status = null;
+    notice = null;
+    noticeWarning = false;
     _recorded = false;
+    _resultPlayed = false;
     phase = LotoPhase.playing;
-    switch (mode) {
-      case LotoMode.computer:
-        startComputer(mode: winMode);
-      case LotoMode.twoPlayers:
-        startTwoPlayers(mode: winMode);
-      case LotoMode.network:
-        if (isHost) {
-          startNetwork(mode: winMode);
-        } else {
-          // Клиент ждёт нового снимка от хоста.
-          game = LotoGame.start(
-            players: const [],
-            winMode: winMode,
-            bag: BarrelBag.empty(),
-          );
-          status = 'Ждём, пока ведущий начнёт новую партию…';
-          notifyListeners();
-        }
+    if (mode == LotoMode.network) {
+      if (isHost) {
+        startNetwork(mode: winMode);
+      } else {
+        // Клиент ждёт нового снимка от хоста.
+        game = LotoGame.start(
+          players: const [],
+          winMode: winMode,
+          bag: BarrelBag.empty(),
+        );
+        notice = 'Ждём, пока ведущий начнёт новую партию…';
+        notifyListeners();
+      }
+      return;
     }
+    start(setup);
   }
 
   // ---- Вытянуть бочонок -----------------------------------------------------
 
-  /// Вытянуть следующий бочонок. В сети это делает только хост.
+  /// Вытянуть следующий бочонок. В сети это делает только хост; в режиме
+  /// ведущего-человека — взрослый кнопкой. В компьютерных режимах бочонок
+  /// достаёт таймер, но кнопку тоже оставляем — иногда хочется поторопить.
   void drawBarrel() {
-    if (!canDraw) return;
-    _rivalTimer?.cancel();
+    if (phase != LotoPhase.playing) return;
+    if (game.isOver || game.isBagEmpty) return;
+    if (mode == LotoMode.network && !isHost) return;
+    _drawNow();
+  }
+
+  void _drawNow() {
+    _cancelDrawTimer();
     _history.add(game);
     game = game.draw();
     final barrel = game.lastBarrel;
     _hintHighlight = const {};
-    status = null;
+    notice = null;
+    noticeWarning = false;
     notifyListeners();
     if (barrel == null) return;
     sounds.play(GameSound.guess);
@@ -312,11 +436,12 @@ class LotoController extends ChangeNotifier {
       );
     }
     if (game.isBagEmpty && !game.isOver) {
-      status = 'Бочонки закончились — закрой последнее число!';
-      _scheduleStatusClear();
+      notice = 'Бочонки закончились — закрой последнее число!';
+      _scheduleNoticeClear();
       notifyListeners();
     }
-    _maybeScheduleRivalClose();
+    _reactForRival(barrel);
+    _afterMove();
   }
 
   // ---- Закрыть число --------------------------------------------------------
@@ -324,11 +449,10 @@ class LotoController extends ChangeNotifier {
   /// Закрыть число на карточке игрока [playerId] (или на своей, если не
   /// указан). В сети закрывает только свою карточку: клиент отправляет `move`
   /// хосту, хост проверяет и рассылает подтверждение.
-  void closeNumber(int number, {String? playerId}) {
+  void close({required String playerId, required int number}) {
     if (phase != LotoPhase.playing) return;
-    final who = playerId ?? myPlayerId;
     if (mode == LotoMode.network) {
-      if (who != myPlayerId) return;
+      if (playerId != myPlayerId) return;
       if (isHost) {
         _hostApplyClose(myPlayerId, number);
       } else {
@@ -338,18 +462,23 @@ class LotoController extends ChangeNotifier {
       }
       return;
     }
-    _applyLocalClose(who, number);
+    _applyLocalClose(playerId, number);
   }
+
+  /// Закрывает число на своей карточке.
+  void closeMine(int number) =>
+      close(playerId: myPlayerId, number: number);
 
   void _applyLocalClose(String playerId, int number) {
     final before = game.playerById(playerId);
     final outcome = game.close(playerId: playerId, number: number);
     if (!outcome.accepted) {
-      status = outcome.status.hint.isEmpty
+      notice = outcome.status.hint.isEmpty
           ? 'Так закрыть нельзя'
           : outcome.status.hint;
+      noticeWarning = true;
       sounds.play(GameSound.miss);
-      _scheduleStatusClear();
+      _scheduleNoticeClear();
       notifyListeners();
       return;
     }
@@ -361,12 +490,13 @@ class LotoController extends ChangeNotifier {
             LotoRules.closedRows(card: before.card, closed: before.closed);
     sounds.play(closedRow ? GameSound.crown : GameSound.move);
     _hintHighlight = const {};
-    status = null;
+    notice = null;
+    noticeWarning = false;
     if (game.isOver) {
       _onWin(playerId);
     } else {
       notifyListeners();
-      _maybeScheduleRivalClose();
+      _afterMove();
     }
   }
 
@@ -427,12 +557,10 @@ class LotoController extends ChangeNotifier {
   /// Компьютерный соперник закрывает свой бочонок с небольшой задержкой,
   /// чтобы ребёнок успел заметить, что произошло. В режимах без компьютера
   /// ничего не делает.
-  void _maybeScheduleRivalClose() {
+  void _reactForRival(Barrel? barrel) {
     _rivalTimer?.cancel();
-    if (mode != LotoMode.computer) return;
-    if (game.isOver) return;
-    final barrel = lastBarrel;
-    if (barrel == null) return;
+    if (barrel == null || game.isOver) return;
+    if (mode != LotoMode.computerHost) return;
     final closing = [
       for (final player in game.players)
         if (player.isComputer &&
@@ -445,7 +573,7 @@ class LotoController extends ChangeNotifier {
           player,
     ];
     if (closing.isEmpty) return;
-    _rivalTimer = Timer(const Duration(milliseconds: 900), () {
+    _rivalTimer = Timer(setup.rivalReaction, () {
       if (_disposed || phase != LotoPhase.playing) return;
       var current = game;
       var rowClosed = false;
@@ -475,50 +603,45 @@ class LotoController extends ChangeNotifier {
         _onWin(closing.first.id);
       } else {
         notifyListeners();
+        _afterMove();
       }
     });
   }
 
   // ---- Подсказка -----------------------------------------------------------
 
-  /// Подсветить числа карточки игрока [playerId] (или свою), которые уже
-  /// можно закрыть. Повторный тап гасит подсветку.
-  void showHint({String? playerId}) {
+  /// Кнопка «Подсказка»: подсвечивает числа, которые можно закрыть. Повторный
+  /// тап гасит подсветку.
+  void toggleHint() {
     if (phase != LotoPhase.playing) return;
-    final who = playerId ?? myPlayerId;
-    final player = game.playerById(who);
-    if (player == null) return;
     if (_hintHighlight.isNotEmpty) {
       _hintHighlight = const {};
-      status = null;
+      notice = null;
       notifyListeners();
       return;
     }
-    final numbers = LotoRules.closableNumbers(
-      card: player.card,
-      closed: player.closed,
-      drawn: game.drawn,
-    );
+    final numbers = myClosable;
     _hintHighlight = Set<int>.unmodifiable(numbers);
-    status = numbers.isEmpty
+    noticeWarning = false;
+    notice = numbers.isEmpty
         ? 'Пока закрывать нечего — ждём подходящий бочонок'
         : 'Можно закрыть: ${numbers.join(', ')}';
-    _scheduleStatusClear();
+    _scheduleNoticeClear();
     notifyListeners();
   }
 
   // ---- Отмена хода ---------------------------------------------------------
 
   /// Отменить последний вытянутый бочонок. В сети это может только хост: он
-  /// откатывает своё состояние и рассылает новый снимок. В локальных режимах
-  /// откатывает состояние и опционально останавливает таймер соперника.
+  /// откатывает своё состояние и рассылает новый снимок.
   void undo() {
     if (!canUndo) return;
     _rivalTimer?.cancel();
     if (mode == LotoMode.network) {
       final previous = _history.removeLast();
       game = previous;
-      status = 'Ход отменён';
+      notice = 'Ход отменён';
+      noticeWarning = false;
       _hintHighlight = const {};
       _sendSnapshot();
       notifyListeners();
@@ -527,9 +650,10 @@ class LotoController extends ChangeNotifier {
     final previous = _history.removeLast();
     game = previous;
     _hintHighlight = const {};
-    status = 'Ход отменён — бочонок вернулся в мешок';
+    notice = 'Ход отменён — бочонок вернулся в мешок';
+    noticeWarning = false;
     sounds.play(GameSound.move);
-    _scheduleStatusClear();
+    _scheduleNoticeClear();
     notifyListeners();
   }
 
@@ -538,19 +662,33 @@ class LotoController extends ChangeNotifier {
   /// Сдаться. Победа достаётся сопернику.
   void resign() {
     if (!canResign) return;
-    String winner;
+    String winnerId;
     if (mode == LotoMode.network) {
       network!.service.send(const NetworkMessage('resign'));
-      winner = myPlayerId == 'host' ? 'client' : 'host';
+      winnerId = myPlayerId == 'host' ? 'client' : 'host';
     } else {
       // computer mode — соперник выигрывает
-      winner = 'rival';
+      winnerId = 'rival';
     }
-    game = game.declareWinner(winner);
-    _onWin(winner, byResign: true);
+    game = game.declareWinner(winnerId);
+    _onWin(winnerId, byResign: true);
   }
 
-  // ---- Победа --------------------------------------------------------------
+  // ---- Победа и общие последствия хода ------------------------------------
+
+  /// Общие последствия хода: победа, конец мешка или следующий бочонок.
+  void _afterMove() {
+    if (_disposed || phase != LotoPhase.playing) return;
+    if (game.isOver) {
+      _cancelTimers();
+      return;
+    }
+    if (game.isBagEmpty) {
+      _cancelTimers();
+      return;
+    }
+    _scheduleDraw(setup.drawDelay);
+  }
 
   void _onWin(String winnerId, {bool byResign = false}) {
     phase = LotoPhase.over;
@@ -560,21 +698,46 @@ class LotoController extends ChangeNotifier {
     // В режиме двух игроков всегда «выиграл человек на этом устройстве» —
     // результат в статистику пишем как победу.
     final iWon = mode == LotoMode.twoPlayers ? true : isMe;
-    sounds.play(
-      resultSoundName(draw: false, local: local, iWon: iWon),
-    );
+    if (!_resultPlayed) {
+      _resultPlayed = true;
+      sounds.play(
+        resultSoundName(draw: false, local: local, iWon: iWon),
+      );
+    }
     if (!_recorded) {
       _recorded = true;
       unawaited(settings.recordGame(won: iWon || mode == LotoMode.twoPlayers));
     }
-    status = null;
+    notice = null;
     _hintHighlight = const {};
     notifyListeners();
-    // `winner` и `byResign` нужны будущему голосовому поздравлению и
-    // статистике; сейчас победитель виден на экране без них.
+    // `winner` и `byResign` нужны будущему голосовому поздравлению; сейчас
+    // победитель виден на экране без них.
     if (winner != null && byResign) {
       // Сдача — без дополнительных эффектов.
     }
+  }
+
+  void _scheduleDraw(Duration delay) {
+    _cancelDrawTimer();
+    if (_disposed) return;
+    if (mode.needsManualDraw) return;
+    if (mode == LotoMode.network) return; // сеть рисует через _drawNow по кнопке
+    if (game.players.isEmpty || game.isOver || game.isBagEmpty) return;
+    // Пока компьютерный соперник не закрыл свой бочонок, новый не тянем.
+    if (_rivalTimer?.isActive ?? false) return;
+    // И ждём ребёнка: он должен успеть закрыть своё число.
+    if (game.pendingClosers.any((player) => !player.isComputer)) return;
+    _drawTimer = Timer(delay, _drawNow);
+  }
+
+  void _scheduleNoticeClear() {
+    _noticeTimer?.cancel();
+    _noticeTimer = Timer(const Duration(seconds: 4), () {
+      if (_disposed) return;
+      notice = null;
+      notifyListeners();
+    });
   }
 
   // ---- Сеть ----------------------------------------------------------------
@@ -601,14 +764,16 @@ class LotoController extends ChangeNotifier {
         game = game.declareWinner(winner);
         _onWin(winner, byResign: true);
       case 'disconnected':
-        status = 'Связь потеряна. Проверь Wi-Fi и попробуй снова.';
+        notice = 'Связь потеряна. Проверь Wi-Fi и попробуй снова.';
+        noticeWarning = true;
         phase = LotoPhase.over;
         notifyListeners();
       case 'desync':
         _desync('Партия рассинхронизировалась');
       case 'error':
         final msg = message.data['message'];
-        status = msg is String ? msg : 'Связь потеряна';
+        notice = msg is String ? msg : 'Связь потеряна';
+        noticeWarning = true;
         phase = LotoPhase.over;
         notifyListeners();
     }
@@ -623,7 +788,7 @@ class LotoController extends ChangeNotifier {
         sounds.play(GameSound.guess);
         _speakNumber(parsed.number);
         _hintHighlight = const {};
-        status = null;
+        notice = null;
         notifyListeners();
       } else if (kind == 'closeNumber') {
         final parsed = parseCloseEvent(data);
@@ -639,9 +804,9 @@ class LotoController extends ChangeNotifier {
             final closedRow = before != null &&
                 after != null &&
                 LotoRules.closedRows(
-                      card: after.card,
-                      closed: after.closed,
-                    ) >
+                  card: after.card,
+                  closed: after.closed,
+                ) >
                     LotoRules.closedRows(
                       card: before.card,
                       closed: before.closed,
@@ -656,8 +821,9 @@ class LotoController extends ChangeNotifier {
           }
         } else if (parsed.playerId == myPlayerId) {
           // Хост отказал в закрытии — покажем причину.
-          status = parsed.reason ?? 'Так закрыть нельзя';
-          _scheduleStatusClear();
+          notice = parsed.reason ?? 'Так закрыть нельзя';
+          noticeWarning = true;
+          _scheduleNoticeClear();
           notifyListeners();
         }
       } else if (kind == 'snapshot') {
@@ -666,7 +832,8 @@ class LotoController extends ChangeNotifier {
         winMode = snap.game.winMode;
         myPlayerId = isHost ? snap.hostPlayerId : snap.clientPlayerId;
         _hintHighlight = const {};
-        status = null;
+        notice = null;
+        _resultPlayed = false;
         notifyListeners();
       }
     } on FormatException catch (e) {
@@ -689,7 +856,8 @@ class LotoController extends ChangeNotifier {
   }
 
   void _desync(String reason) {
-    status = reason;
+    notice = reason;
+    noticeWarning = true;
     phase = LotoPhase.over;
     notifyListeners();
   }
@@ -737,24 +905,38 @@ class LotoController extends ChangeNotifier {
     }());
   }
 
-  // ---- Утилиты -------------------------------------------------------------
+  void _cancelDrawTimer() {
+    _drawTimer?.cancel();
+    _drawTimer = null;
+  }
 
-  void _scheduleStatusClear() {
-    _statusTimer?.cancel();
-    _statusTimer = Timer(const Duration(seconds: 4), () {
-      if (_disposed) return;
-      status = null;
-      notifyListeners();
-    });
+  void _cancelTimers() {
+    _cancelDrawTimer();
+    _rivalTimer?.cancel();
+    _rivalTimer = null;
+    _noticeTimer?.cancel();
+    _noticeTimer = null;
   }
 
   @override
   void dispose() {
     _disposed = true;
-    _rivalTimer?.cancel();
-    _statusTimer?.cancel();
+    _cancelTimers();
     _networkSub?.cancel();
-    unawaited(_tts?.stop());
+    final tts = _tts;
+    if (tts != null) {
+      // TTS может быть недоступен (в тестах): глушим ошибки, чтобы dispose
+      // всегда завершался тихо.
+      unawaited(
+        () async {
+          try {
+            await tts.stop();
+          } catch (_) {
+            // Синтезатор мог быть уже освобождён или недоступен.
+          }
+        }(),
+      );
+    }
     super.dispose();
   }
 }

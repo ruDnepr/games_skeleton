@@ -54,6 +54,10 @@ void ticketToRideValidateMove(Map<String, Object?> move) {
       if (routeIndex is! int || routeIndex < 0 || routeIndex > 100) {
         throw const FormatException('Ход не распознан: маршрут');
       }
+      final loco = move['locomotiveCount'];
+      if (loco != null && (loco is! int || loco < 0 || loco > 10)) {
+        throw const FormatException('Ход не распознан: локомотивы');
+      }
     case 'drawFaceUp':
       final index = move['index'];
       if (index is! int || index < 0 || index > 10) {

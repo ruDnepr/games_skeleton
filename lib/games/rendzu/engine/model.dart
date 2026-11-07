@@ -234,6 +234,13 @@ enum Ruleset { gomoku, renju }
 
 extension RulesetX on Ruleset {
   String get russianName => this == Ruleset.gomoku ? 'Гомоку' : 'Рэндзю';
+
+  /// Описание набора правил для экрана выбора — текст дословно из оригинала.
+  String get russianDescription => switch (this) {
+        Ruleset.gomoku => 'Свободное пять в ряд — без запрещённых ходов',
+        Ruleset.renju =>
+          'Рэндзю — у чёрных есть запрещённые ходы (двойное три, двойное четыре, оверлайн)',
+      };
 }
 
 /// Размер доски. 9×9 — быстрее и понятнее ребёнку; 15×15 — классический рэндзю.
@@ -261,9 +268,10 @@ extension DifficultyX on Difficulty {
         Difficulty.hard => 'Сложный',
       };
 
+  /// Описание уровня для экрана выбора — текст дословно из оригинала.
   String get russianDescription => switch (this) {
-        Difficulty.easy => 'Часто уступает — отлично для первой партии',
-        Difficulty.medium => 'Играет ровно и блокирует атаки',
-        Difficulty.hard => 'Думает на ход вперёд и не делает запрещённых',
+        Difficulty.easy => 'ИИ видит только ближайшие угрозы — можно выиграть',
+        Difficulty.medium => 'ИИ оценивает паттерны и блокирует атаки',
+        Difficulty.hard => 'ИИ просчитывает глубоко и не делает запрещённых ходов',
       };
 }

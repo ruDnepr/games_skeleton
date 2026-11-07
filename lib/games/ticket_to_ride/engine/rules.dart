@@ -105,13 +105,41 @@ class TicketToRideRules {
 
   /// Занимает маршрут: списывает карты, ставит вагоны, начисляет очки и
   /// завершает ход. Бросает [StateError], если маршрут занять нельзя.
-  GameState claimRoute(GameState state, int seat, int routeIndex) {
+  ///
+  /// Параметр [locomotiveCount] — сколько локомотивов потратить из руки. `null`
+  /// значит «по умолчанию»: сначала карты нужного цвета, потом локомотивы.
+  /// Если игрок через диалог выбрал иное распределение, передаём конкретное
+  /// число. Число должно быть в диапазоне `0..min(locoCount, length)`, и
+  /// оставшихся цветных карт должно хватить на остальную длину маршрута.
+  GameState claimRoute(
+    GameState state,
+    int seat,
+    int routeIndex, {
+    int? locomotiveCount,
+  }) {
     if (!canClaimRoute(state, seat, routeIndex)) {
       throw StateError('Маршрут нельзя занять');
     }
     final route = state.routes[routeIndex];
     final player = state.players[seat];
-    final split = _spendForRoute(player.hand, route);
+    final colorCount = player.hand.where((c) => c.color == route.color).length;
+    final locoCount =
+        player.hand.where((c) => c.color == CardColor.locomotive).length;
+    var locoToSpend = locomotiveCount;
+    if (locoToSpend != null) {
+      if (locoToSpend < 0 || locoToSpend > locoCount) {
+        throw StateError('Локомотивов нет в таком количестве');
+      }
+      final colorToSpend = route.length - locoToSpend;
+      if (colorToSpend < 0 || colorToSpend > colorCount) {
+        throw StateError('Цветных карт не хватает при таком числе локомотивов');
+      }
+    } else {
+      // По умолчанию — сначала цветные, потом локомотивы.
+      final colorToSpend = colorCount >= route.length ? route.length : colorCount;
+      locoToSpend = route.length - colorToSpend;
+    }
+    final split = _spendForRoute(player.hand, route, locoToSpend);
     final newDiscard = [...state.discardPile, ...split.spent];
     final newRoutes = List<Route>.of(state.routes);
     newRoutes[routeIndex] = route.copyWith(claimedBy: seat);
@@ -129,19 +157,17 @@ class TicketToRideRules {
     return _endTurn(next);
   }
 
-  /// Списывает с руки карты нужного цвета и локомотивы под маршрут. Сначала
-  /// берём карты цвета маршрута, потом добиваем локомотивами. Возвращает пару
-  /// «оставшиеся карты» и «потраченные карты» — порядок в обеих списках тот же,
-  /// что и в исходной руке, без перемешивания.
+  /// Списывает с руки карты нужного цвета и локомотивы под маршрут. Тратится
+  /// ровно [locomotiveCount] локомотивов и `route.length − locomotiveCount`
+  /// цветных карт; остальное остаётся в руке. Возвращает пару «оставшиеся
+  /// карты» и «потраченные карты» — порядок в обеих списках тот же, что и в
+  /// исходной руке, без перемешивания.
   ({List<TrainCard> kept, List<TrainCard> spent}) _spendForRoute(
     List<TrainCard> hand,
     Route route,
+    int locomotiveCount,
   ) {
-    final colorCount = hand.where((c) => c.color == route.color).length;
-    final colorToSpend = colorCount >= route.length
-        ? route.length
-        : colorCount;
-    final locoToSpend = route.length - colorToSpend;
+    final colorToSpend = route.length - locomotiveCount;
     final kept = <TrainCard>[];
     final spent = <TrainCard>[];
     var colorSpent = 0;
@@ -152,7 +178,7 @@ class TicketToRideRules {
         spent.add(card);
         continue;
       }
-      if (card.color == CardColor.locomotive && locoSpent < locoToSpend) {
+      if (card.color == CardColor.locomotive && locoSpent < locomotiveCount) {
         locoSpent++;
         spent.add(card);
         continue;
@@ -414,7 +440,12 @@ class TicketToRideRules {
   /// Бросает [StateError] при нелегальном действии — это рассинхрон.
   GameState applyAction(GameState state, int seat, TtrAction action) {
     return switch (action.kind) {
-      'claim' => claimRoute(state, seat, action.routeIndex!),
+      'claim' => claimRoute(
+        state,
+        seat,
+        action.routeIndex!,
+        locomotiveCount: action.locomotiveCount,
+      ),
       'drawFaceUp' => drawFaceUpCard(state, seat, action.faceUpIndex!),
       'drawDeck' => drawDeckCard(state, seat),
       'drawDestinations' => drawDestinations(state, seat),

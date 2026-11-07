@@ -18,7 +18,8 @@ final rendzuGame = GameDefinition(
   rules: rendzuRules,
   settings: rendzuSettings,
   // Кнопка «Играть» на карточке и сетевое лобби ведут сюда. Когда друг уже
-  // подключился, [network] заполнен и партия сразу открывается по сети.
+  // подключился, [network] заполнен и партия сразу открывается по сети тем
+  // набором правил и размером доски, которые выбрал хост до лобби.
   start: (context, settings, {network}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -33,4 +34,14 @@ final rendzuGame = GameDefinition(
   // Хост играет чёрными и ходит первым — так же, как белые в нардах. Просто и
   // предсказуемо для ребёнка.
   hostSide: (_) => 'black',
+  // Перед сетевым лобби хост выбирает набор правил и размер доски. Выбор
+  // сохраняется в настройках и уезжает в рукопожатие через [rendzuOptions].
+  preNetwork: (context, settings) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            RendzuNetworkSetupPage(settings: settings),
+      ),
+    );
+  },
 );

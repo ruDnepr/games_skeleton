@@ -13,869 +13,784 @@ import 'engine/model.dart';
 import 'engine/rules.dart';
 import 'network.dart';
 
-/// Режим партии.
-enum BattleshipMode { local, ai, network }
+/// Режим партии: против компьютера, по сети или вдвоём на одном устройстве.
+enum GameMode { computer, network, local }
 
-/// Фаза партии: расстановка, бой, окончание.
-enum BattleshipPhase { setup, playing, over }
-
-/// Кого сейчас ждём на выстрел — для подписи «чей ход».
-enum BattleshipActiveSide { me, computer, friend, nobody }
-
-/// Контроллер партии морского боя. Содержит состояние, историю, звук и сеть;
-/// интерфейс только рисует то, что контроллер ему отдаёт, и зовёт его методы.
-///
-/// Один и тот же контроллер ведёт партию против компьютера, вдвоём на одном
-/// устройстве и по сети: различия собраны в нескольких ветках, а правила и
-/// история общие. Так расхождения между режимами быть не может.
-///
-/// **Приватность флота**: в сетевой игре корабли соперника никогда не
-/// пересылаются — только координаты выстрелов и их результаты. Контроллер
-/// хранит свой флот локально, а чужой остаётся неизвестным (`_enemyFleet`
-/// пустой); результат вычисляет тот, по кому стреляли.
-class BattleshipController extends ChangeNotifier {
-  BattleshipController({
-    required this.settings,
-    required this.sounds,
+/// Параметры создаваемой партии. Передаются как данные из расстановки
+/// в экран игры — сам контроллер живёт на экране игры, а не на расстановке,
+/// чтобы при смене экрана не «умирать» вместе с расстановкой.
+class GameSetup {
+  const GameSetup({
+    required this.mode,
+    required this.myFleet,
+    required this.iShootFirst,
+    this.difficulty = Difficulty.easy,
+    this.enemyFleet,
     this.network,
-  }) : isHost = network?.isHost ?? false {
-    if (network != null) {
-      mode = BattleshipMode.network;
-      _networkSub = network!.service.events.listen(_onNetworkEvent);
+  });
+
+  final GameMode mode;
+
+  /// Мой флот — всегда видим этому устройству.
+  final Fleet myFleet;
+
+  /// true, если первый выстрел за этим игроком. Против компьютера — всегда
+  /// true (ребёнок ходит первым). В сети — true для хоста. Вдвоём на одном
+  /// устройстве — true (игрок 1 начинает).
+  final bool iShootFirst;
+
+  final Difficulty difficulty;
+
+  /// Флот соперника. В игре с компьютером и вдвоём на одном устройстве —
+  /// известен (туман войны только в UI). В сети — null: флот соперника
+  /// неизвестен, результаты выстрелов считает сторона, по которой стреляют.
+  final Fleet? enemyFleet;
+
+  final NetworkSession? network;
+
+  /// Копия с подменённой сетевой сессией — на случай, если расстановка
+  /// создавала её, а экран игры хочет переиспользовать ту же.
+  GameSetup copyWithNetwork(NetworkSession? network) => GameSetup(
+        mode: mode,
+        myFleet: myFleet,
+        iShootFirst: iShootFirst,
+        difficulty: difficulty,
+        enemyFleet: enemyFleet,
+        network: network ?? this.network,
+      );
+}
+
+/// Снимок состояния партии перед выстрелом — для отмены хода (офлайн).
+class _StateSnapshot {
+  const _StateSnapshot({
+    required this.turn,
+    required this.shotsAtMe,
+    required this.myShotsOnEnemy,
+    required this.winner,
+    required this.ply,
+  });
+  final Side turn;
+  final Map<Square, Shot> shotsAtMe;
+  final Map<Square, Shot> myShotsOnEnemy;
+  final Side? winner;
+  final int ply;
+}
+
+/// Анимация выстрела для UI: кто стрелял, сам выстрел, потопленный корабль
+/// (для обводки) и длительность. Живёт рядом с контроллером, чтобы виджет
+/// поля мог рендерить оверлей, зная свой размер клетки.
+class ShotAnimation {
+  const ShotAnimation({
+    required this.shooter,
+    required this.shot,
+    required this.sunkShip,
+    required this.duration,
+  });
+  final Side shooter;
+  final Shot shot;
+  final Ship? sunkShip;
+  final Duration duration;
+}
+
+/// Контроллер партии морского боя.
+///
+/// Одна копия на партию, живёт на экране игры (а не на расстановке). Знает
+/// всё про текущее состояние и историю, сам играет за компьютер и обменивается
+/// сообщениями с сетевым соперником. UI только слушает [notifyListeners] и
+/// рисует.
+class BattleshipController extends ChangeNotifier {
+  BattleshipController(
+    this.setup,
+    this.settings, {
+    GameSounds? sounds,
+    this.thinkingDelay = const Duration(milliseconds: 650),
+  })  : sounds = sounds ?? GameSounds(settings),
+        rules = battleshipRules,
+        _ai = BattleshipAI(setup.difficulty) {
+    if (setup.mode == GameMode.network && setup.network == null) {
+      throw ArgumentError('Для сетевой игры необходимо соединение');
+    }
+    _turn = setup.iShootFirst ? Side.me : Side.enemy;
+    _myFleet = setup.myFleet;
+    _enemyFleet = setup.enemyFleet;
+    // В сетевой игре расстановка завершается раньше, чем открывается экран
+    // партии: SetupPage ждёт готовности обеих сторон и только потом ведёт
+    // сюда. Значит к моменту создания контроллера соперник уже готов. Событие
+    // `fleetReady` могло прийти до подписки — мы его пропустим, но это не
+    // страшно: доверяем гарантии расстановки.
+    peerFleetReady = true;
+    _networkSubscription = setup.network?.service.events.listen(_onNetworkMessage);
+    settings.addListener(_settingsChanged);
+    if (_turn == Side.enemy && setup.mode == GameMode.computer) {
+      _startComputer();
     }
   }
 
+  final GameSetup setup;
   final SettingsController settings;
   final GameSounds sounds;
-  final NetworkSession? network;
-  late final bool isHost;
+  final BattleshipRules rules;
+  final Duration thinkingDelay;
+  final BattleshipAI _ai;
 
-  BattleshipMode mode = BattleshipMode.local;
-  Difficulty difficulty = Difficulty.medium;
-  BattleshipPhase phase = BattleshipPhase.setup;
-
-  /// Чей сейчас выстрел (с точки зрения этого устройства: «me» = моя очередь).
+  late Fleet _myFleet;
+  Fleet? _enemyFleet;
   Side _turn = Side.me;
   Side? _winner;
+  int _ply = 0;
+  final Map<Square, Shot> _shotsAtMe = {};
+  final Map<Square, Shot> _myShotsOnEnemy = {};
+  final List<_StateSnapshot> _history = [];
+  final ShotHistory _records = ShotHistory();
 
-  /// Мой флот — всегда видим этому устройству. В расстановке это флот того,
-  /// кто сейчас расставляет; в игре — мой флот.
-  Fleet _myFleet = emptyFleet;
+  ShotAnimation? animation;
+  bool computerThinking = false;
+  bool hintThinking = false;
+  bool waitingForUndo = false;
+  bool awaitingShotResult = false;
+  Square? _pendingShotSquare;
+  int? incomingUndoPly;
+  bool peerFleetReady = false;
+  bool myFleetReady = true;
+  String? notice;
+  String? fatalMessage;
+  Square? suggestedShot;
+  String? hintText;
+  Side? _resignedWinner;
 
-  /// Флот соперника. В режиме ИИ и вдвоём на одном устройстве — известен
-  /// (туман войны только в UI). В сети — пустой: мы его не знаем.
-  Fleet _enemyFleet = emptyFleet;
-
-  /// Для локального режима 2 на 1: после расстановки первого игрока его флот
-  /// прячем сюда, чтобы второй игрок не видел чужие корабли во время своей
-  /// расстановки. Когда второй готов — перекладываем в `_myFleet`/`_enemyFleet`.
-  Fleet _stashedFleet = emptyFleet;
-
-  /// В локальном режиме 2 на 1: чья сейчас расстановка (0 — первый игрок,
-  /// 1 — второй). В других режимах всегда 0.
-  int _setupTurn = 0;
-
-  /// Готовность к бою. В сети — оба игрока должны послать `fleetReady`, чтобы
-  /// началась партия.
-  bool _myReady = false;
-  bool _enemyReady = false;
-
-  /// Мои выстрелы по сопернику: клетка → выстрел с результатом.
-  final Map<Square, Shot> _myShots = {};
-
-  /// Выстрелы соперника по мне: клетка → выстрел с результатом.
-  final Map<Square, Shot> _enemyShots = {};
-
-  /// История выстрелов для отмены хода (офлайн). По сети отмены нет — правила
-  /// морского боя необратимы после результата.
-  final ShotHistory _history = ShotHistory();
-  final List<BoardSnapshot> _snapshots = [];
-
-  /// Подсказка: клетка, куда стоит стрелять (показывается, пока игрок не
-  /// выстрелит или не нажмёт «Скрыть»).
-  Square? _hint;
-  String? _status;
-  bool _busy = false;
+  StreamSubscription<NetworkMessage>? _networkSubscription;
+  Timer? _noticeTimer;
   bool _disposed = false;
-  Timer? _aiTimer;
-  StreamSubscription<NetworkMessage>? _networkSub;
+  int _generation = 0;
 
-  final Random _rng = Random();
-  static const BattleshipRules _rules = BattleshipRules();
+  /// Сколько заметка висит перед автозакрытием.
+  static const noticeDuration = Duration(milliseconds: 1400);
 
-  // ---- Доступ к состоянию ---------------------------------------------------
+  /// Текущее состояние для UI.
+  GameState get state => GameState(
+        turn: _turn,
+        myBoard: MyBoard(fleet: _myFleet, incoming: _resultsOf(_shotsAtMe)),
+        enemyBoard: EnemyBoard(Map.unmodifiable(_myShotsOnEnemy)),
+        winner: _winner,
+      );
 
-  Fleet get myFleet => _myFleet;
-  Fleet get enemyFleet => _enemyFleet;
-  Side get turn => _turn;
-  Side? get winner => _winner;
-  bool get isOver => phase == BattleshipPhase.over || _winner != null;
-  bool get myReady => _myReady;
-  bool get enemyReady => _enemyReady;
-  bool get busy => _busy;
-  String? get status => _status;
-  Square? get hint => _hint;
+  static Map<Square, ShotResult> _resultsOf(Map<Square, Shot> shots) =>
+      shots.map((k, v) => MapEntry(k, v.result));
 
-  /// Мои выстрелы по сопернику (для отрисовки верхнего поля).
-  Map<Square, Shot> get myShots => Map.unmodifiable(_myShots);
+  Side? get winner => _winner ?? _resignedWinner;
+  bool get isOver => winner != null;
+  bool get waitingForPeer =>
+      setup.mode == GameMode.network && !peerFleetReady;
+  bool get isMyTurn =>
+      !isOver &&
+      fatalMessage == null &&
+      !waitingForPeer &&
+      _turn == Side.me;
 
-  /// Выстрелы соперника по мне (для отрисовки нижнего поля).
-  Map<Square, Shot> get enemyShots => Map.unmodifiable(_enemyShots);
+  bool get isAnimating => animation != null;
 
-  /// Подсказки включены в настройках.
+  /// Можно ли принимать тапы по полю соперника прямо сейчас.
+  bool get canInteract =>
+      !isOver &&
+      fatalMessage == null &&
+      !isAnimating &&
+      !computerThinking &&
+      !waitingForUndo &&
+      !awaitingShotResult &&
+      incomingUndoPly == null &&
+      !waitingForPeer &&
+      isMyTurn;
+
+  bool get canUndo {
+    if (_history.isEmpty ||
+        _resignedWinner != null ||
+        isAnimating ||
+        waitingForUndo ||
+        incomingUndoPly != null ||
+        fatalMessage != null ||
+        waitingForPeer) {
+      return false;
+    }
+    if (setup.mode == GameMode.network) {
+      return setup.network != null &&
+          _records.last?.shooter == Side.enemy &&
+          _turn == Side.me;
+    }
+    if (setup.mode == GameMode.computer) {
+      final last = _records.last;
+      if (last == null) return false;
+      if (last.shooter == Side.enemy) {
+        // Последним стрелял компьютер — отменяем пару «мой ход + ответ ИИ».
+        return _history.length >= 2;
+      }
+      // Последним стрелял игрок (попадание, дополнительный ход) — отменяем один.
+      return true;
+    }
+    // Вдвоём на одном устройстве — отменяем один выстрел.
+    return _history.isNotEmpty;
+  }
+
+  /// Можно ли сдаться. В расстановке и в уже окончившейся партии — нельзя.
+  bool get canResign =>
+      !isOver && fatalMessage == null;
+
+  /// Последний выстрел — для UI.
+  Shot? get lastShot => _records.last?.shot;
+
+  /// История выстрелов для экрана «история».
+  List<ShotRecord> get history => _records.records;
+
+  /// Подсказки включены в настройках каркаса.
   bool get hintsEnabled => settings.flag(battleshipGameId, 'hints');
 
-  /// Расстановка завершена и можно стрелять.
-  bool get setupComplete => phase == BattleshipPhase.playing;
+  void _settingsChanged() {
+    if (!hintsEnabled) {
+      suggestedShot = null;
+      hintText = null;
+    }
+    _notify();
+  }
 
-  /// Чья сейчас расстановка в локальном режиме 2 на 1: 0 — первый игрок,
-  /// 1 — второй. В других режимах всегда 0.
-  int get setupTurn => _setupTurn;
-
-  /// Все ли 10 кораблей расставлены у того, кто сейчас расставляет.
-  bool get myFleetComplete => _myFleet.isComplete;
-
-  /// Активная сторона — для подписи «чей ход».
-  BattleshipActiveSide get activeSide {
-    if (isOver) return BattleshipActiveSide.nobody;
-    if (phase == BattleshipPhase.setup) {
-      if (mode == BattleshipMode.network) {
-        // В сети ждём, пока оба расставят флот.
-        return _myReady && !_enemyReady
-            ? BattleshipActiveSide.friend
-            : BattleshipActiveSide.me;
+  /// Показывает временную заметку, которая сама скроется через [noticeDuration].
+  void _showNotice(String text) {
+    notice = text;
+    _noticeTimer?.cancel();
+    _noticeTimer = Timer(noticeDuration, () {
+      if (_disposed) return;
+      if (notice != null) {
+        notice = null;
+        _notify();
       }
-      return BattleshipActiveSide.me;
-    }
-    if (mode == BattleshipMode.ai) {
-      return _turn == Side.me
-          ? BattleshipActiveSide.me
-          : BattleshipActiveSide.computer;
-    }
-    if (mode == BattleshipMode.network) {
-      return _turn == Side.me
-          ? BattleshipActiveSide.me
-          : BattleshipActiveSide.friend;
-    }
-    return BattleshipActiveSide.me; // вдвоём на одном устройстве — всегда человек
+    });
+    _notify();
   }
 
-  /// Можно ли тапать по полю соперника прямо сейчас.
-  bool get canInteract {
-    if (isOver) return false;
-    if (phase != BattleshipPhase.playing) return false;
-    if (_busy) return false;
-    if (mode == BattleshipMode.ai) return _turn == Side.me;
-    if (mode == BattleshipMode.network) return _turn == Side.me;
-    return true; // local: оба игрока — люди, тапать может текущий
-  }
-
-  /// Можно ли отменить последний ход. По сети отмены нет.
-  bool get canUndo {
-    if (isOver) return false;
-    if (phase != BattleshipPhase.playing) return false;
-    if (mode == BattleshipMode.network) return false;
-    return _snapshots.isNotEmpty;
-  }
-
-  /// Можно ли сдаться.
-  bool get canResign =>
-      phase == BattleshipPhase.playing && mode != BattleshipMode.local;
-
-  /// Подпись «чей ход» в строку состояния.
-  String get turnLabel {
-    if (phase == BattleshipPhase.setup) {
-      if (mode == BattleshipMode.network) {
-        if (!_myReady) return 'Расставь корабли';
-        if (!_enemyReady) return 'Ждём, когда друг расставит корабли…';
-      }
-      return 'Расставь корабли';
-    }
-    if (mode == BattleshipMode.local) {
-      if (isOver) return 'Партия окончена';
-      return _turn == Side.me
-          ? 'Ход игрока 1 — стреляй по полю игрока 2!'
-          : 'Ход игрока 2 — стреляй по полю игрока 1!';
-    }
-    switch (activeSide) {
-      case BattleshipActiveSide.me:
-        return 'Твой ход — стреляй по полю соперника!';
-      case BattleshipActiveSide.computer:
-        return 'Компьютер думает…';
-      case BattleshipActiveSide.friend:
-        return 'Ходит друг…';
-      case BattleshipActiveSide.nobody:
-        return isOver ? 'Партия окончена' : '';
-    }
-  }
-
-  /// Имя игрока для верхней/нижней панели.
-  String playerName(Side side) {
-    if (mode == BattleshipMode.local) {
-      return side == Side.me ? 'Игрок 1' : 'Игрок 2';
-    }
-    if (mode == BattleshipMode.ai) {
-      return side == Side.me ? settings.nickname : 'Компьютер';
-    }
-    // Сеть: хост = me, клиент = enemy.
-    final mine = isHost ? Side.me : Side.enemy;
-    if (side == mine) return settings.nickname;
-    return network?.peerName ?? 'Друг';
-  }
-
-  /// Чья очередь с точки зрения этого устройства. В сети у хоста `me`, у
-  /// клиента `enemy`.
-  Side get _mySide => mode == BattleshipMode.network
-      ? (isHost ? Side.me : Side.enemy)
-      : Side.me;
-
-  // ---- Расстановка ---------------------------------------------------------
-
-  /// Можно ли поставить корабль [type] в [origin] с ориентацией [orientation].
-  /// Не меняет состояние — нужно для подсветки в UI.
-  bool canPlaceShip(
-    ShipType type,
-    Square origin,
-    Orientation orientation,
-  ) {
-    final ship = Ship(type: type, origin: origin, orientation: orientation);
-    return _rules.canPlace(_myFleet, ship);
-  }
-
-  /// Сколько ещё кораблей типа [type] можно поставить.
-  int remainingToPlace(ShipType type) =>
-      type.count - _myFleet.countOf(type);
-
-  /// Ставит корабль [type] в [origin] с ориентацией [orientation]. Если нельзя
-  /// (не помещается, касается других или лимит исчерпан) — ничего не делает.
-  /// Возвращает true, если корабль поставлен.
-  bool placeShip(
-    ShipType type,
-    Square origin,
-    Orientation orientation,
-  ) {
-    if (phase != BattleshipPhase.setup) return false;
-    if (_myReady) return false;
-    if (remainingToPlace(type) <= 0) return false;
-    final ship = Ship(type: type, origin: origin, orientation: orientation);
-    if (!_rules.canPlace(_myFleet, ship)) return false;
-    _myFleet = _rules.withShip(_myFleet, ship);
-    _status = null;
-    notifyListeners();
-    return true;
-  }
-
-  /// Убирает корабль, стоящий в клетке [cell]. Если в клетке корабля нет —
-  /// ничего не делает.
-  void removeShipAt(Square cell) {
-    if (phase != BattleshipPhase.setup) return;
-    if (_myReady) return;
-    final next = _rules.withoutShipAt(_myFleet, cell);
-    if (next == _myFleet) return;
-    _myFleet = next;
-    _status = null;
-    notifyListeners();
-  }
-
-  /// Случайная корректная расстановка полного флота. Удобно, когда не хочется
-  /// расставлять вручную.
-  void autoArrange() {
-    if (phase != BattleshipPhase.setup) return;
-    if (_myReady) return;
-    _myFleet = _rules.autoFleet(_rng);
-    _status = null;
-    notifyListeners();
-  }
-
-  /// Очищает расстановку — например, чтобы начать заново.
-  void clearFleet() {
-    if (phase != BattleshipPhase.setup) return;
-    if (_myReady) return;
-    _myFleet = emptyFleet;
-    _status = null;
-    notifyListeners();
-  }
-
-  /// Поворачивает корабль в клетке [cell]: убирает его и... возвращает с другой
-  /// ориентацией, если это возможно. Удобно для кнопки «Повернуть».
-  void rotateShipAt(Square cell) {
-    if (phase != BattleshipPhase.setup) return;
-    if (_myReady) return;
-    final ship = _myFleet.shipAt(cell);
-    if (ship == null) return;
-    final without = _rules.withoutShipAt(_myFleet, cell);
-    final rotated = Ship(
-      type: ship.type,
-      origin: ship.origin,
-      orientation: ship.orientation.flipped,
-    );
-    if (_rules.canPlace(without, rotated)) {
-      _myFleet = _rules.withShip(without, rotated);
-      notifyListeners();
-      return;
-    }
-    // Не помещается повёрнутым — попробуем сдвинуть, чтобы влез.
-    for (final origin in allSquares()) {
-      final candidate = Ship(
-        type: ship.type,
-        origin: origin,
-        orientation: ship.orientation.flipped,
-      );
-      if (_rules.canPlace(without, candidate)) {
-        _myFleet = _rules.withShip(without, candidate);
-        notifyListeners();
-        return;
-      }
-    }
-  }
-
-  /// Игрок закончил расстановку. В сети — отправляет `fleetReady` и ждёт
-  /// соперника. В ИИ — автоматически расставляет флот компьютера и начинает
-  /// бой. В локальном режиме 2 на 1 — прячет флот первого игрока и переходит
-  /// ко второму; когда второй готов — начинает бой.
-  void fleetReady() {
-    if (phase != BattleshipPhase.setup) return;
-    if (_myReady) return;
-    if (!_myFleet.isComplete) return;
-
-    switch (mode) {
-      case BattleshipMode.ai:
-        _enemyFleet = _rules.autoFleet(_rng);
-        _myReady = true;
-        _enemyReady = true;
-        _beginPlay();
-        break;
-      case BattleshipMode.local:
-        if (_setupTurn == 0) {
-          // Первый игрок готов — прячем его флот, расставляет второй.
-          _stashedFleet = _myFleet;
-          _myFleet = emptyFleet;
-          _myReady = false;
-          _setupTurn = 1;
-          _status = 'Игрок 2 расставляет флот';
-          notifyListeners();
-        } else {
-          // Второй игрок готов — оба флота на месте, начинаем.
-          _enemyFleet = _myFleet;
-          _myFleet = _stashedFleet;
-          _stashedFleet = emptyFleet;
-          _myReady = true;
-          _enemyReady = true;
-          _beginPlay();
-        }
-        break;
-      case BattleshipMode.network:
-        _myReady = true;
-        network!.service.send(NetworkMessage('event', fleetReadyToJson()));
-        _status = _enemyReady ? null : 'Ждём, когда друг расставит корабли…';
-        notifyListeners();
-        _maybeBeginNetworkPlay();
-        break;
-    }
-  }
-
-  /// Возвращает расстановку к началу (для экрана расстановки, если игрок
-  /// хочет переиграть расстановку). В сети после `fleetReady` уже поздно.
-  void restartSetup() {
-    if (phase != BattleshipPhase.setup) return;
-    if (mode == BattleshipMode.network && _myReady) return;
-    _myFleet = emptyFleet;
-    _stashedFleet = emptyFleet;
-    _myReady = false;
-    _setupTurn = 0;
-    _status = null;
-    notifyListeners();
-  }
-
-  // ---- Старт партий --------------------------------------------------------
-
-  /// Начало партии против компьютера. Вызывается до расстановки.
-  void startAi(Difficulty level, {bool meFirst = true}) {
-    mode = BattleshipMode.ai;
-    difficulty = level;
-    _resetForSetup();
-    _turn = meFirst ? Side.me : Side.enemy;
-    notifyListeners();
-    // Если человек не ходит первым, ИИ расставит флот и сразу откроет огонь
-    // после расстановки человека — это произойдёт в `fleetReady`.
-  }
-
-  /// Начало партии вдвоём на одном устройстве.
-  void startLocal() {
-    mode = BattleshipMode.local;
-    _resetForSetup();
-    _turn = Side.me;
-    notifyListeners();
-  }
-
-  /// Начало партии по сети. Хост стреляет первым.
-  void startNetwork() {
-    mode = BattleshipMode.network;
-    _resetForSetup();
-    _turn = Side.me; // условно; по сети настоящий ход определит хост
-    notifyListeners();
-  }
-
-  void _resetForSetup() {
-    phase = BattleshipPhase.setup;
-    _myFleet = emptyFleet;
-    _enemyFleet = emptyFleet;
-    _stashedFleet = emptyFleet;
-    _myReady = false;
-    _enemyReady = false;
-    _setupTurn = 0;
-    _myShots.clear();
-    _enemyShots.clear();
-    _history.clear();
-    _snapshots.clear();
-    _hint = null;
-    _status = null;
-    _busy = false;
-    _winner = null;
-  }
-
-  /// Переход из расстановки в бой.
-  void _beginPlay() {
-    phase = BattleshipPhase.playing;
-    _status = null;
-    notifyListeners();
-    // Если первый ход не мой — стреляет ИИ (по сети в этой ветке не оказываемся:
-    // там бой начинается в `_maybeBeginNetworkPlay`).
-    if (mode == BattleshipMode.ai && _turn != Side.me) {
-      _scheduleAiTurn();
-    }
-  }
-
-  void _maybeBeginNetworkPlay() {
-    if (_myReady && _enemyReady && phase == BattleshipPhase.setup) {
-      // Хост стреляет первым. У хоста `me`, у клиента `enemy`.
-      _turn = isHost ? Side.me : Side.enemy;
-      _beginPlay();
-    }
-  }
-
-  // ---- Выстрелы ------------------------------------------------------------
-
-  /// Текущий игрок стреляет в [target]. В локальном режиме работает для обоих
-  /// игроков; в ИИ — только для человека; в сети — только в свой ход.
-  void shoot(Square target) {
+  /// Выстрел игрока по клетке поля соперника.
+  Future<void> shoot(Square square) async {
     if (!canInteract) return;
-    if (mode == BattleshipMode.local && _turn == Side.enemy) {
-      _applyEnemyShot(target, remote: false);
+    if (_myShotsOnEnemy.containsKey(square)) {
+      _showNotice('Сюда уже стреляли — выбери другую клетку.');
       return;
     }
-    if (_turn != Side.me) return;
-    _applyMyShot(target, remote: false);
+    clearHint();
+    if (setup.mode == GameMode.network) {
+      _sendShot(square);
+      awaitingShotResult = true;
+      _pendingShotSquare = square;
+      _notify();
+      // Результат придёт сообщением shotResult — до тех пор ход «подвешен».
+      return;
+    }
+    // Против компьютера и вдвоём: результат считает контроллер.
+    final enemy = _enemyFleet;
+    if (enemy == null) return;
+    final shot = rules.shootResult(enemy, _myShotsOnEnemy, square);
+    await _applyMyShot(shot, remote: false);
   }
 
-  /// Я стреляю в [target]. В сети — отправляет выстрел сопернику и ждёт
-  /// результат; офлайн — считает результат сам (мы знаем флот соперника).
-  void _applyMyShot(Square target, {required bool remote}) {
-    if (_myShots.containsKey(target)) return; // повторный выстрел запрещён
-    // Снимок для отмены (офлайн).
+  /// Применяет мой выстрел с известным результатом (локально или из сети).
+  Future<void> _applyMyShot(Shot shot, {required bool remote}) async {
+    if (_disposed || fatalMessage != null) return;
     _pushSnapshot();
-
-    if (mode == BattleshipMode.network) {
-      // Отправляем выстрел; результат придёт сообщением `event` shotResult.
-      final ply = _myShots.length + _enemyShots.length + 1;
-      network!.service.send(
-        NetworkMessage('move', shotToJson(target, ply)),
-      );
-      sounds.play(GameSound.guess);
-      _busy = true;
-      _hint = null;
-      _status = 'Выстрел по клетке $target…';
-      notifyListeners();
-      return;
-    }
-
-    // Офлайн: мы знаем флот соперника, считаем сами.
-    final shot = _rules.shootResult(_enemyFleet, _myShots, target);
-    _myShots[target] = shot;
-    _history.push(ShotRecord(
+    _records.push(ShotRecord(
       shooter: Side.me,
       shot: shot,
-      sunkBefore: _rules.sunkCount(_enemyFleet, _myShots),
-      allSunkBefore: false,
+      sunkBefore:
+          rules.sunkCount(_enemyFleet ?? const Fleet([]), _myShotsOnEnemy),
+      allSunkBefore: _winner != null,
     ));
-    _busy = false;
-    _hint = null;
-    _afterMyShot(shot, remote: remote);
+    _myShotsOnEnemy[shot.square] = shot;
+    _ply++;
+    _playShotSound(shot, Side.me);
+    final sunkShip = _sunkShipOf(shot, _enemyFleet);
+    // Ход переключаем СРАЗУ (до анимации) — иначе ложный desync из-за
+    // рассинхрона анимаций на двух устройствах.
+    final passTurn = shot.result == ShotResult.miss;
+    if (passTurn) _turn = Side.enemy;
+    animation = ShotAnimation(
+      shooter: Side.me,
+      shot: shot,
+      sunkShip: sunkShip,
+      duration: _durationFor(shot),
+    );
+    final gen = ++_generation;
+    _notify();
+    await Future<void>.delayed(animation!.duration);
+    if (_disposed || gen != _generation) return;
+    final pause = _pauseAfter(shot);
+    if (pause > Duration.zero) {
+      await Future<void>.delayed(pause);
+      if (_disposed || gen != _generation) return;
+    }
+    animation = null;
+    _afterShot(shot, shooter: Side.me, remote: remote);
+    _notify();
+    if (isOver || fatalMessage != null) return;
+    // В игре с компьютером ИИ ходит после анимации (после моего промаха —
+    // его ход). Вдвоём на одном устройстве ход переходит к другому игроку.
+    if (passTurn && setup.mode == GameMode.computer) _startComputer();
+    // При попадании/потоплении тот же игрок стреляет снова — ход не меняется.
   }
 
-  /// Действия после моего выстрела (звук, переход хода, победа).
-  void _afterMyShot(Shot shot, {required bool remote}) {
-    sounds.play(GameSound.guess);
-    switch (shot.result) {
-      case ShotResult.miss:
-        sounds.play(GameSound.miss);
-        _status = 'Мимо! Ход переходит к сопернику.';
-        _turn = Side.enemy;
-        notifyListeners();
-        _maybeAiTurn();
-        break;
-      case ShotResult.hit:
-        sounds.play(GameSound.capture);
-        _status = 'Попадание! Стреляй ещё раз.';
-        notifyListeners();
-        break;
-      case ShotResult.sunk:
-        sounds.play(GameSound.capture);
-        sounds.play(GameSound.crown);
-        _status = 'Потоплен ${shot.sunkType?.russianLabel ?? 'корабль'}! '
-            'Стреляй ещё раз.';
-        notifyListeners();
-        break;
-    }
-    if (_rules.fleetSunk(_enemyFleet, _myShots)) {
-      _onWin(Side.me);
-    }
-  }
-
-  /// Соперник стреляет в [target]. В сети — это вызывается при получении `move`
-  /// от соперника: мы знаем свой флот, считаем результат, отправляем обратно
-  /// `event` shotResult. Офлайн — в локальном режиме 2 на 1 человек стреляет
-  /// за соперника; в ИИ — стреляет компьютер.
-  void _applyEnemyShot(Square target, {required bool remote}) {
-    if (_enemyShots.containsKey(target)) return;
+  /// Применяет входящий выстрел соперника по моему полю.
+  Future<void> _applyIncomingShot(Square square,
+      {required bool remote}) async {
+    if (_disposed || fatalMessage != null) return;
+    // Результат считает та сторона, по которой стреляют (она знает свой флот).
+    final shot = rules.shootResult(_myFleet, _shotsAtMe, square);
     _pushSnapshot();
-
-    // Свой флот всегда знаем — даже в сети (это наш флот).
-    final shot = _rules.shootResult(_myFleet, _enemyShots, target);
-    _enemyShots[target] = shot;
-    _history.push(ShotRecord(
+    _records.push(ShotRecord(
       shooter: Side.enemy,
       shot: shot,
-      sunkBefore: _rules.sunkCount(_myFleet, _enemyShots),
-      allSunkBefore: false,
+      sunkBefore: rules.sunkCount(_myFleet, _shotsAtMe),
+      allSunkBefore: _winner != null,
     ));
-    sounds.play(GameSound.guess);
-
-    if (mode == BattleshipMode.network) {
-      // Отправляем результат обратно сопернику.
-      final nextTurn = shot.result == ShotResult.miss ? 'me' : 'enemy';
-      final ply = _myShots.length + _enemyShots.length;
-      network!.service.send(
-        NetworkMessage('event', shotResultToJson(
-          ply: ply,
-          square: target,
-          result: shot.result,
-          sunkType: shot.sunkType,
-          nextTurn: nextTurn,
-        )),
-      );
+    _shotsAtMe[square] = shot;
+    _ply++;
+    _playShotSound(shot, Side.enemy);
+    final sunkShip = _sunkShipOf(shot, _myFleet);
+    final passTurn = shot.result == ShotResult.miss;
+    if (passTurn) _turn = Side.me;
+    animation = ShotAnimation(
+      shooter: Side.enemy,
+      shot: shot,
+      sunkShip: sunkShip,
+      duration: _durationFor(shot),
+    );
+    final gen = ++_generation;
+    _notify();
+    await Future<void>.delayed(animation!.duration);
+    if (_disposed || gen != _generation) return;
+    final pause = _pauseAfter(shot);
+    if (pause > Duration.zero) {
+      await Future<void>.delayed(pause);
+      if (_disposed || gen != _generation) return;
     }
+    animation = null;
+    _afterShot(shot, shooter: Side.enemy, remote: remote);
+    _notify();
+    if (isOver || fatalMessage != null) return;
+    // В игре с компьютером после попадания ИИ стреляет снова (после анимации).
+    if (!passTurn && setup.mode == GameMode.computer) _startComputer();
+    // В сетевой игре после попадания соперник продолжит сам — его контроллер
+    // пришлёт следующий 'shot'; здесь ничего запускать не нужно. Вдвоём на
+    // одном устройстве ход остаётся за соперником (тем же игроком).
+  }
 
+  Ship? _sunkShipOf(Shot shot, Fleet? fleet) {
+    if (shot.result != ShotResult.sunk || fleet == null) return null;
+    return fleet.shipAt(shot.square);
+  }
+
+  /// Длительность анимации выстрела. Чуть длиннее на попадании и потоплении —
+  /// чтобы ребёнок успел увидеть, что случилось, прежде чем ход пойдёт дальше.
+  Duration _durationFor(Shot shot) => switch (shot.result) {
+        ShotResult.miss => const Duration(milliseconds: 700),
+        ShotResult.hit => const Duration(milliseconds: 1050),
+        ShotResult.sunk => const Duration(milliseconds: 1500),
+      };
+
+  /// Пауза после анимации (до смены хода / следующего выстрела).
+  Duration _pauseAfter(Shot shot) => switch (shot.result) {
+        ShotResult.miss => Duration.zero,
+        ShotResult.hit => const Duration(milliseconds: 350),
+        ShotResult.sunk => const Duration(milliseconds: 600),
+      };
+
+  /// Звук выстрела. Стрелок-человек слышит «запуск» (guess), затем результат.
+  /// ИИ стреляет тихо: только результат (miss/capture/crown).
+  void _playShotSound(Shot shot, Side shooter) {
     switch (shot.result) {
       case ShotResult.miss:
         sounds.play(GameSound.miss);
-        _status = 'Соперник промахнулся в $target. Твой ход!';
-        _turn = Side.me;
-        _busy = false;
-        notifyListeners();
-        break;
       case ShotResult.hit:
         sounds.play(GameSound.capture);
-        _status = 'Соперник попал в $target! Стреляет ещё раз.';
-        notifyListeners();
-        // В ИИ — ходит ИИ снова; в сети — ждём следующий выстрел; в локальном —
-        // текущий игрок (теперь это соперник) стреляет снова.
-        _maybeAiTurn();
-        break;
       case ShotResult.sunk:
-        sounds.play(GameSound.capture);
         sounds.play(GameSound.crown);
-        _status = 'Соперник потопил ваш ${shot.sunkType?.russianLabel ?? 'корабль'}. '
-            'Стреляет ещё раз.';
-        notifyListeners();
-        _maybeAiTurn();
-        break;
     }
-    if (_rules.fleetSunk(_myFleet, _enemyShots)) {
-      _onWin(Side.enemy);
+    if (shooter == Side.me) sounds.play(GameSound.guess);
+  }
+
+  void _afterShot(Shot shot, {required Side shooter, required bool remote}) {
+    // В сетевой игре победу объявляет каждая сторона сама по своему состоянию
+    // (счёт 10 sunk у стрелка-победителя; флот-проигравший видит потопленным
+    // свой флот). В игре с компьютером и вдвоём контроллер знает оба флота.
+    final sunkFleet = shooter == Side.me ? _enemyFleet : _myFleet;
+    final myShots = shooter == Side.me ? _myShotsOnEnemy : _shotsAtMe;
+    // В сети мы не знаем флот соперника, но можем посчитать «sunk» в своих
+    // выстрелах: 10 sunk = победа.
+    final wonByCount = setup.mode == GameMode.network &&
+        shooter == Side.me &&
+        myShots.values.where((s) => s.result == ShotResult.sunk).length >=
+            totalShips;
+    final sunk = (sunkFleet != null && rules.fleetSunk(sunkFleet, myShots)) ||
+        wonByCount;
+    if (!sunk) return;
+    _winner = shooter;
+    // Side.me на этом устройстве — всегда «я». В сети это так же: каждое
+    // устройство считает себя «me», а соперника — «enemy».
+    final iWon = setup.mode == GameMode.local || shooter == Side.me;
+    sounds.play(iWon ? GameSound.win : GameSound.lose);
+    settings.recordGame(won: iWon);
+  }
+
+  /// Ход компьютера: ИИ выбирает клетку и стреляет по моему полю.
+  void _startComputer() {
+    if (_disposed || computerThinking || isOver || fatalMessage != null) {
+      return;
+    }
+    computerThinking = true;
+    final gen = _generation;
+    final snapshot = EnemyBoard(Map.unmodifiable(_shotsAtMe));
+    _notify();
+    Future<void>(() async {
+      if (_disposed || gen != _generation) return;
+      await Future<void>.delayed(thinkingDelay);
+      if (_disposed || gen != _generation || isOver) {
+        computerThinking = false;
+        _notify();
+        return;
+      }
+      final target = _ai.chooseShot(snapshot, _rng);
+      if (_disposed || gen != _generation) return;
+      computerThinking = false;
+      await _applyIncomingShot(target, remote: false);
+    });
+  }
+
+  /// Подсказка: подсвечивает клетку, куда стоит стрелять.
+  Future<void> showHint() async {
+    if (!hintsEnabled || !canInteract || hintThinking) return;
+    hintThinking = true;
+    notice = null;
+    _notify();
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (_disposed || !hintsEnabled) return;
+      final board = EnemyBoard(Map.unmodifiable(_myShotsOnEnemy));
+      Square? pick;
+      if (setup.mode == GameMode.computer &&
+          setup.difficulty != Difficulty.easy) {
+        pick = _ai.chooseShot(board, _rng);
+      } else {
+        final unfired = board.unfired;
+        if (unfired.isEmpty) {
+          pick = null;
+        } else {
+          final list = unfired.toList();
+          pick = list[_rng.nextInt(list.length)];
+        }
+      }
+      if (pick != null) {
+        suggestedShot = pick;
+        hintText = setup.mode == GameMode.computer &&
+                setup.difficulty != Difficulty.easy
+            ? 'Подсказка: ИИ советует стрелять в $pick.'
+            : 'Подсказка: попробуй клетку $pick.';
+      }
+    } finally {
+      if (!_disposed) {
+        hintThinking = false;
+        _notify();
+      }
     }
   }
 
-  /// Применяет результат моего выстрела, пришедший по сети. Обновляет `_myShots`
-  /// и решает, чей теперь ход.
-  void applyShotResult(Square square, ShotResult result, {ShipType? sunkType}) {
-    if (!_myShots.containsKey(square) || _myShots[square]!.result != result) {
-      _myShots[square] = Shot(
-        square: square,
-        result: result,
-        sunkType: sunkType,
-      );
-    }
-    _busy = false;
-    switch (result) {
-      case ShotResult.miss:
-        sounds.play(GameSound.miss);
-        _status = 'Мимо! Ход переходит к другу.';
-        _turn = Side.enemy;
-        notifyListeners();
-        break;
-      case ShotResult.hit:
-        sounds.play(GameSound.capture);
-        _status = 'Попадание! Стреляй ещё раз.';
-        notifyListeners();
-        break;
-      case ShotResult.sunk:
-        sounds.play(GameSound.capture);
-        sounds.play(GameSound.crown);
-        _status = 'Потоплен ${sunkType?.russianLabel ?? 'корабль'}! '
-            'Стреляй ещё раз.';
-        notifyListeners();
-        break;
-    }
-    // В сети мы не знаем флот соперника, но если пришло «sunk» 10-го корабля —
-    // мы победили. Проще: считаем число «sunk» в `_myShots`.
-    final sunkCount = _myShots.values
-        .where((s) => s.result == ShotResult.sunk)
-        .length;
-    if (sunkCount >= totalShips) {
-      _onWin(Side.me);
-    }
-  }
-
-  // ---- Подсказка ------------------------------------------------------------
-
-  /// Предлагает клетку для выстрела — на уровне сложности выше среднего. Сам
-  /// выстрел не делает: ребёнок стреляет сам.
-  void showHint() {
-    if (!canInteract) return;
-    if (!hintsEnabled) return;
-    final enemy = EnemyBoard(_myShots);
-    final ai = const BattleshipAI(Difficulty.medium);
-    _hint = ai.chooseShot(enemy, _rng);
-    _status = 'Попробуй выстрелить в $_hint';
-    notifyListeners();
-  }
-
-  /// Скрывает подсказку.
   void clearHint() {
-    if (_hint != null) {
-      _hint = null;
-      _status = null;
-      notifyListeners();
-    }
+    if (suggestedShot == null && hintText == null) return;
+    suggestedShot = null;
+    hintText = null;
+    _notify();
   }
 
-  // ---- Отмена хода ---------------------------------------------------------
+  void clearNotice() {
+    if (notice == null) return;
+    notice = null;
+    _notify();
+  }
 
+  /// Отмена последнего хода.
   void undo() {
     if (!canUndo) return;
-    if (_snapshots.isEmpty) return;
-    // Снимки делаются перед каждым выстрелом. В локальном режиме 2 на 1,
-    // когда ход переходит к другому игроку, снимок «до чужого выстрела»
-    // имеет чужой ход — откатывать его бессмысленно (друг сразу выстрелит
-    // заново). Поэтому в локальном режиме откатываем сразу несколько
-    // снимков, пока не вернёмся к своему ходу.
-    var snap = _snapshots.removeLast();
-    while (mode == BattleshipMode.local &&
-        _snapshots.isNotEmpty &&
-        snap.turn != _turn) {
-      snap = _snapshots.removeLast();
+    if (setup.mode == GameMode.network) {
+      waitingForUndo = true;
+      try {
+        setup.network!.service
+            .send(NetworkMessage('undoRequest', {'ply': _ply}));
+      } catch (_) {
+        waitingForUndo = false;
+        fatalMessage = 'Связь потеряна.';
+      }
+      _notify();
+      return;
     }
-    _turn = snap.turn;
-    _myShots
-      ..clear()
-      ..addAll(snap.myShots);
-    _enemyShots
-      ..clear()
-      ..addAll({
-        for (final e in snap.myIncoming.entries)
-          e.key: Shot(square: e.key, result: e.value),
-      });
-    if (_history.records.isNotEmpty) _history.pop();
-    _busy = false;
-    _hint = null;
-    _status = 'Ход отменён';
-    notifyListeners();
+    var count = 1;
+    if (setup.mode == GameMode.computer &&
+        _records.last?.shooter == Side.enemy) {
+      count = 2;
+    }
+    _restore(count);
+  }
+
+  void _restore(int count) {
+    _generation++;
+    computerThinking = false;
+    hintThinking = false;
+    animation = null;
+    for (var i = 0; i < count && _history.isNotEmpty; i++) {
+      final snap = _history.removeLast();
+      _turn = snap.turn;
+      _shotsAtMe
+        ..clear()
+        ..addAll(snap.shotsAtMe);
+      _myShotsOnEnemy
+        ..clear()
+        ..addAll(snap.myShotsOnEnemy);
+      _winner = snap.winner;
+      _ply = snap.ply;
+      _records.pop();
+    }
+    _resignedWinner = null;
+    waitingForUndo = false;
+    incomingUndoPly = null;
+    suggestedShot = null;
+    hintText = null;
+    notice = null;
+    _notify();
+  }
+
+  void respondToUndo(bool accepted) {
+    final ply = incomingUndoPly;
+    if (ply == null) return;
+    try {
+      setup.network!.service.send(
+        NetworkMessage('undoResponse', {'ply': ply, 'accepted': accepted}),
+      );
+      incomingUndoPly = null;
+      if (accepted && _history.isNotEmpty) {
+        _restore(1);
+      } else {
+        _notify();
+      }
+    } catch (_) {
+      fatalMessage = 'Связь потеряна.';
+      _notify();
+    }
+  }
+
+  void resign() {
+    if (isOver || fatalMessage != null) return;
+    if (setup.mode == GameMode.network) {
+      try {
+        setup.network!.service.send(const NetworkMessage('resign'));
+      } catch (_) {}
+    }
+    // Я сдаюсь — победил соперник (Side.enemy с точки зрения этого устройства).
+    _resignedWinner = Side.enemy;
+    _generation++;
+    computerThinking = false;
+    animation = null;
+    settings.recordGame(won: false);
+    sounds.play(GameSound.lose);
+    _notify();
   }
 
   void _pushSnapshot() {
-    if (mode == BattleshipMode.network) return; // по сети отмены нет
+    if (setup.mode == GameMode.network) return;
     // В режиме ИИ снимки делаем только перед выстрелом человека: отменять
-    // ход компьютера бессмысленно — он сразу выстрелит заново. Так кнопка
-    // «Отменить» возвращает игрока к его последнему решению.
-    if (mode == BattleshipMode.ai && _turn != Side.me) return;
-    _snapshots.add(BoardSnapshot(
+    // ход компьютера бессмысленно — он сразу выстрелит заново.
+    if (setup.mode == GameMode.computer && _turn != Side.me) return;
+    _history.add(_StateSnapshot(
       turn: _turn,
-      myIncoming: {
-        for (final e in _enemyShots.entries) e.key: e.value.result,
-      },
-      myShots: Map.of(_myShots),
+      shotsAtMe: Map.of(_shotsAtMe),
+      myShotsOnEnemy: Map.of(_myShotsOnEnemy),
+      winner: _winner,
+      ply: _ply,
     ));
   }
 
-  // ---- Сдача ---------------------------------------------------------------
+  // ---- Сетевые сообщения -------------------------------------------------
 
-  void resign() {
-    if (phase != BattleshipPhase.playing) return;
-    if (mode == BattleshipMode.network) {
-      network!.service.send(const NetworkMessage('resign'));
-    }
-    _onWin(_turn == Side.me ? Side.enemy : Side.me, byResign: true);
-  }
-
-  // ---- Победа ---------------------------------------------------------------
-
-  void _onWin(Side winner, {bool byResign = false}) {
-    if (isOver) return;
-    phase = BattleshipPhase.over;
-    _winner = winner;
-    _busy = false;
-    final iWon = mode == BattleshipMode.network
-        ? winner == _mySide
-        : (mode == BattleshipMode.ai
-            ? winner == Side.me
-            : true); // local: кто-то на этом устройстве всегда выиграл
-    sounds.play(
-      resultSoundName(
-        draw: false,
-        local: mode != BattleshipMode.network,
-        iWon: iWon,
-      ),
-    );
-    settings.recordGame(won: iWon || mode == BattleshipMode.local);
-    notifyListeners();
-  }
-
-  // ---- Перезапуск ----------------------------------------------------------
-
-  /// Перезапуск той же партии. Используется кнопкой «Играть снова» офлайн.
-  void playAgain() {
-    _aiTimer?.cancel();
-    _resetForSetup();
-    notifyListeners();
-  }
-
-  // ---- ИИ -------------------------------------------------------------------
-
-  void _maybeAiTurn() {
-    if (mode != BattleshipMode.ai) return;
-    if (phase != BattleshipPhase.playing) return;
-    if (_turn != Side.enemy) return;
-    _scheduleAiTurn();
-  }
-
-  void _scheduleAiTurn() {
-    _busy = true;
-    notifyListeners();
-    _aiTimer?.cancel();
-    _aiTimer = Timer(const Duration(milliseconds: 450), _runAiTurn);
-  }
-
-  void _runAiTurn() {
-    if (_disposed || phase != BattleshipPhase.playing) return;
-    if (mode != BattleshipMode.ai) return;
-    if (_turn != Side.enemy) {
-      _busy = false;
-      notifyListeners();
-      return;
-    }
-    // ИИ видит свои выстрелы по мне — это его «поле соперника».
-    final enemy = EnemyBoard(_enemyShots);
-    final ai = BattleshipAI(difficulty);
-    final target = ai.chooseShot(enemy, _rng);
-    _busy = false;
-    _applyEnemyShot(target, remote: false);
-  }
-
-  // ---- Сеть -----------------------------------------------------------------
-
-  void _onNetworkEvent(NetworkMessage event) {
-    if (_disposed) return;
-    switch (event.type) {
-      case 'move':
-        // Соперник стреляет по мне — считаем результат и отправляем обратно.
-        _receiveShot(event.data);
-        break;
-      case 'event':
-        final kind = event.data['kind'];
-        if (kind == 'shotResult') {
-          _receiveShotResult(event.data);
-        } else if (kind == 'fleetReady') {
-          _enemyReady = true;
-          _status = null;
-          notifyListeners();
-          _maybeBeginNetworkPlay();
-        }
-        break;
-      case 'resign':
-        if (isOver) return;
-        _onWin(_mySide, byResign: true);
-        break;
-      case 'disconnected':
-        _status = 'Связь потеряна. Проверь Wi-Fi и попробуй снова.';
-        phase = BattleshipPhase.over;
-        notifyListeners();
-        break;
-      case 'desync':
-        _desync('Партия рассинхронизировалась');
-        break;
-      case 'error':
-        final msg = event.data['message'];
-        _status = msg is String ? msg : 'Связь потеряна';
-        phase = BattleshipPhase.over;
-        notifyListeners();
-        break;
-    }
-  }
-
-  void _receiveShot(Map<String, Object?> data) {
-    if (phase != BattleshipPhase.playing) return;
+  void _sendShot(Square square) {
     try {
-      final parsed = parseShot(data);
+      final ply = _myShotsOnEnemy.length + _shotsAtMe.length + 1;
+      setup.network!.service
+          .send(NetworkMessage('move', shotToJson(square, ply)));
+    } catch (_) {
+      fatalMessage = 'Связь потеряна. Вернись в меню и попробуй ещё раз.';
+      _notify();
+    }
+  }
+
+  void _sendRaw(NetworkMessage message) {
+    try {
+      setup.network!.service.send(message);
+    } catch (_) {
+      fatalMessage = 'Связь потеряна.';
+      _notify();
+    }
+  }
+
+  void _onNetworkMessage(NetworkMessage message) {
+    if (_disposed || fatalMessage != null) return;
+    switch (message.type) {
+      case 'event':
+        final kind = message.data['kind'];
+        if (kind == 'fleetReady') {
+          peerFleetReady = true;
+          _notify();
+        } else if (kind == 'shotResult') {
+          _onShotResult(message);
+        }
+      case 'move':
+        _onPeerShot(message);
+      case 'undoRequest':
+        final valid = message.data['ply'] == _ply &&
+            _history.isNotEmpty &&
+            _records.last?.shooter == Side.me &&
+            _turn == Side.me &&
+            incomingUndoPly == null;
+        if (valid) {
+          incomingUndoPly = _ply;
+          _notify();
+        } else {
+          _sendRaw(NetworkMessage(
+            'undoResponse',
+            {'ply': message.data['ply'], 'accepted': false},
+          ));
+        }
+      case 'undoResponse':
+        if (waitingForUndo &&
+            message.data['ply'] == _ply &&
+            message.data['accepted'] is bool) {
+          waitingForUndo = false;
+          if (message.data['accepted'] == true && _history.isNotEmpty) {
+            _restore(1);
+          } else {
+            _showNotice('Друг решил продолжить без отмены хода.');
+          }
+        }
+      case 'resign':
+        // Соперник сдался — я победил (Side.me с точки зрения этого устройства).
+        _resignedWinner = Side.me;
+        settings.recordGame(won: true);
+        sounds.play(GameSound.win);
+        _generation++;
+        animation = null;
+        _notify();
+      case 'disconnected':
+        if (!isOver) {
+          fatalMessage = 'Связь потеряна. Вернись в меню и попробуй ещё раз.';
+          _notify();
+        }
+      case 'desync':
+        fatalMessage = 'Партии перестали совпадать. Начните новую игру.';
+        _notify();
+      default:
+        break;
+    }
+  }
+
+  /// Соперник стреляет по моему полю: я считаю результат и отвечаю.
+  void _onPeerShot(NetworkMessage message) {
+    try {
+      final parsed = parseShot(message.data);
       if (_turn != Side.enemy) {
-        // Соперник стреляет не в свой ход — это рассинхронизация.
-        _desync('Соперник стреляет не в свой ход');
-        return;
+        throw const FormatException('Разные позиции');
       }
-      if (_enemyShots.containsKey(parsed.square)) {
-        _desync('Соперник стреляет в обстрелянную клетку');
-        return;
+      final square = parsed.square;
+      if (_shotsAtMe.containsKey(square)) {
+        throw const FormatException('Повторный выстрел');
       }
-      _applyEnemyShot(parsed.square, remote: true);
+      unawaited(_applyIncomingShot(square, remote: true).then((_) {
+        if (_disposed || fatalMessage != null) return;
+        final shot = _shotsAtMe[square]!;
+        final nextTurn = shot.result == ShotResult.miss ? 'me' : 'enemy';
+        _sendRaw(NetworkMessage(
+          'event',
+          shotResultToJson(
+            ply: _ply,
+            square: square,
+            result: shot.result,
+            sunkType: shot.sunkType,
+            nextTurn: nextTurn,
+          ),
+        ));
+        // Если мой флот потоплен — я проиграл. Соперник поймёт это по счёту
+        // 10 sunk в своих выстрелах.
+        if (rules.fleetSunk(_myFleet, _shotsAtMe)) {
+          _winner = Side.enemy;
+          sounds.play(GameSound.lose);
+          settings.recordGame(won: false);
+          _notify();
+        }
+      }));
     } on FormatException catch (e) {
       _desync(e.message.isEmpty ? 'Ход не распознан' : e.message);
+    } catch (_) {
+      _desync('Ход не распознан');
     }
   }
 
-  void _receiveShotResult(Map<String, Object?> data) {
-    if (phase != BattleshipPhase.playing) return;
+  /// Приходит результат моего выстрела — применяю его к своему обзору.
+  void _onShotResult(NetworkMessage message) {
     try {
-      final parsed = parseShotResult(data);
-      // Результат должен прийти по нашему выстрелу.
-      if (_turn != Side.me) {
-        _desync('Соперник прислал результат не в свой ход');
-        return;
+      final parsed = parseShotResult(message.data);
+      if (_turn != Side.me || !awaitingShotResult) {
+        throw const FormatException('Разные позиции');
       }
-      // Если клетка не в `_myShots`, это странно — мы должны были стрелять.
-      // На всякий случай добавим.
-      applyShotResult(
-        parsed.square,
-        parsed.result,
+      if (_pendingShotSquare != parsed.square) {
+        throw const FormatException('Не та клетка');
+      }
+      final shot = Shot(
+        square: parsed.square,
+        result: parsed.result,
         sunkType: parsed.sunkType,
       );
+      awaitingShotResult = false;
+      _pendingShotSquare = null;
+      unawaited(_applyMyShot(shot, remote: true));
     } on FormatException catch (e) {
       _desync(e.message.isEmpty ? 'Результат не распознан' : e.message);
+    } catch (_) {
+      _desync('Результат не распознан');
     }
   }
 
   void _desync(String reason) {
-    _status = reason;
-    phase = BattleshipPhase.over;
-    notifyListeners();
-    // Транспорт уже разорвёт связь; закрывать сервис здесь не нужно — лобби
-    // владеет им и закроет при выходе.
+    _sendRaw(const NetworkMessage('desync'));
+    fatalMessage = reason.isEmpty
+        ? 'Партии перестали совпадать. Начните новую игру.'
+        : 'Партия рассинхронизировалась: $reason';
+    _generation++;
+    animation = null;
+    _notify();
   }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Источник случайности для подсказок и ИИ.
+  final Random _rng = Random();
+
+  /// Применяет входящий выстрел — для тестов.
+  @visibleForTesting
+  Future<void> applyIncomingForTest(Square square) =>
+      _applyIncomingShot(square, remote: true);
+
+  /// Применяет результат своего выстрела — для тестов.
+  @visibleForTesting
+  Future<void> applyMyShotForTest(Shot shot) =>
+      _applyMyShot(shot, remote: false);
 
   @override
   void dispose() {
     _disposed = true;
-    _aiTimer?.cancel();
-    _networkSub?.cancel();
+    _generation++;
+    _noticeTimer?.cancel();
+    settings.removeListener(_settingsChanged);
+    unawaited(_networkSubscription?.cancel());
     super.dispose();
   }
 }

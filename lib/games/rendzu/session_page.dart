@@ -7,10 +7,12 @@ import '../../app/sounds.dart';
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'engine/model.dart';
+import 'network.dart';
 import 'rendzu_controller.dart';
 
-/// Точка входа в партию: с сетевым соединением — сразу партия по сети, без него —
-/// выбор режима (правила, размер доски, противник, уровень, цвет).
+/// Точка входа в партию: с сетевым соединением — сразу партия по сети тем
+/// набором правил и размером доски, что выбрал хост до лобби; без соединения —
+/// экран выбора режима и параметров партии.
 class RendzuEntryPage extends StatelessWidget {
   const RendzuEntryPage({
     super.key,
@@ -23,21 +25,120 @@ class RendzuEntryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (network != null) {
-      // В сети хост играет чёрными. Размер доски и набор правил в сети не
-      // выбираются — берём классический рэндзю на 9×9 (быстрее и понятнее
-      // ребёнку, как в исходной «Рэндзю для Дианы»).
+      // В сети хост играет чёрными. Набор правил и размер доски хост выбирает
+      // до создания сетевой игры; клиент принимает тот, что пришёл в
+      // рукопожатии.
+      final options = network!.lobby.options;
+      final rulesetStr = options['ruleset'] as String? ?? rendzuDefaultRuleset;
+      final boardSizeStr =
+          options['boardSize'] as String? ?? rendzuDefaultBoardSize;
+      final ruleset =
+          rulesetStr == 'renju' ? Ruleset.renju : Ruleset.gomoku;
+      final boardSize = boardSizeStr == 'standard15'
+          ? BoardSize.standard15
+          : BoardSize.small9;
       return RendzuSessionPage(
         settings: settings,
         network: network,
-        ruleset: Ruleset.renju,
-        boardSize: BoardSize.small9,
+        ruleset: ruleset,
+        boardSize: boardSize,
       );
     }
     return RendzuModePage(settings: settings);
   }
 }
 
-/// Выбор режима и параметров партии.
+/// Экран выбора набора правил и размера доски перед сетевым лобби. Хост
+/// выбирает, выбор сохраняется в настройках и уезжает в рукопожатие через
+/// [rendzuOptions]. После нажатия «К сетевой игре» экран закрывается —
+/// открывается общее лобби каркаса.
+class RendzuNetworkSetupPage extends StatefulWidget {
+  const RendzuNetworkSetupPage({super.key, required this.settings});
+  final SettingsController settings;
+
+  @override
+  State<RendzuNetworkSetupPage> createState() => _RendzuNetworkSetupPageState();
+}
+
+class _RendzuNetworkSetupPageState extends State<RendzuNetworkSetupPage> {
+  late Ruleset _ruleset;
+  late BoardSize _boardSize;
+
+  @override
+  void initState() {
+    super.initState();
+    final storedRuleset = widget.settings
+        .gameString(rendzuGameId, rendzuRulesetKey, rendzuDefaultRuleset);
+    final storedBoard = widget.settings
+        .gameString(rendzuGameId, rendzuBoardSizeKey, rendzuDefaultBoardSize);
+    _ruleset = storedRuleset == 'renju' ? Ruleset.renju : Ruleset.gomoku;
+    _boardSize = storedBoard == 'standard15'
+        ? BoardSize.standard15
+        : BoardSize.small9;
+  }
+
+  @override
+  Widget build(BuildContext context) => PageFrame(
+        title: 'Рэндзю',
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+          children: [
+            const Intro(
+              eyebrow: 'СЕТЕВАЯ ПАРТИЯ',
+              title: 'Пять в ряд по сети',
+              subtitle:
+                  'Выбери правила и доску — друг увидит те же настройки в лобби.',
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Набор правил',
+              style: TextStyle(fontWeight: FontWeight.w900, color: ink),
+            ),
+            const SizedBox(height: 8),
+            _RulesetRow(
+              value: _ruleset,
+              onChanged: (r) => setState(() => _ruleset = r),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Размер доски',
+              style: TextStyle(fontWeight: FontWeight.w900, color: ink),
+            ),
+            const SizedBox(height: 8),
+            _BoardSizeRow(
+              value: _boardSize,
+              onChanged: (b) => setState(() => _boardSize = b),
+            ),
+            const SizedBox(height: 26),
+            BigButton(
+              key: const Key('rendzu-network-next'),
+              title: 'К сетевой игре',
+              subtitle: 'Хост играет чёрными и ходит первым',
+              icon: Icons.wifi_rounded,
+              onPressed: () => _next(context),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _next(BuildContext context) async {
+    await widget.settings.setGameString(
+      rendzuGameId,
+      rendzuRulesetKey,
+      _ruleset == Ruleset.renju ? 'renju' : 'gomoku',
+    );
+    await widget.settings.setGameString(
+      rendzuGameId,
+      rendzuBoardSizeKey,
+      _boardSize == BoardSize.standard15 ? 'standard15' : 'small9',
+    );
+    if (!context.mounted) return;
+    // Выбор сделан — возвращаемся, чтобы открылось сетевое лобби.
+    Navigator.of(context).maybePop();
+  }
+}
+
+/// Выбор режима и параметров локальной партии.
 class RendzuModePage extends StatefulWidget {
   const RendzuModePage({super.key, required this.settings});
   final SettingsController settings;
@@ -75,6 +176,8 @@ class _RendzuModePageState extends State<RendzuModePage> {
               value: _ruleset,
               onChanged: (r) => setState(() => _ruleset = r),
             ),
+            const SizedBox(height: 6),
+            _Hint(_ruleset.russianDescription),
             const SizedBox(height: 16),
             const Text(
               'Доска',
@@ -105,6 +208,8 @@ class _RendzuModePageState extends State<RendzuModePage> {
                 value: _difficulty,
                 onChanged: (d) => setState(() => _difficulty = d),
               ),
+              const SizedBox(height: 6),
+              _Hint(_difficulty.russianDescription),
               const SizedBox(height: 14),
               const Text(
                 'Твой цвет',
@@ -153,6 +258,24 @@ class _RendzuModePageState extends State<RendzuModePage> {
       ),
     );
   }
+}
+
+class _Hint extends StatelessWidget {
+  const _Hint(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 8, 0),
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 12,
+            height: 1.3,
+            fontWeight: FontWeight.w700,
+            color: muted,
+          ),
+        ),
+      );
 }
 
 class _RulesetRow extends StatelessWidget {
@@ -221,7 +344,6 @@ class _DifficultyRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const labels = ['Лёгкий', 'Средний', 'Сложный'];
-    const descs = ['Часто уступает', 'Играет ровно', 'Думает на ход вперёд'];
     return Row(
       children: [
         for (var i = 0; i < 3; i++) ...[
@@ -229,7 +351,7 @@ class _DifficultyRow extends StatelessWidget {
           Expanded(
             child: _ChoiceChip(
               label: labels[i],
-              desc: descs[i],
+              desc: '',
               selected: value.index == i,
               onTap: () => onChanged(Difficulty.values[i]),
             ),
@@ -386,32 +508,43 @@ class _ChoiceChip extends StatelessWidget {
           ),
           child: Column(
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: selected ? Colors.white : ink,
-                  fontSize: 14,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: selected ? Colors.white : ink,
+                    fontSize: 14,
+                  ),
                 ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                desc,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color:
-                      selected ? Colors.white.withValues(alpha: .85) : muted,
+              if (desc.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    desc,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: selected
+                          ? Colors.white.withValues(alpha: .85)
+                          : muted,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
       );
 }
 
-/// Экран партии: доска (CustomPaint) посередине, сверху — чей ход и номер хода,
-/// снизу — кнопки управления. Доска занимает максимум места, панели фиксированы.
+/// Экран партии: доска (CustomPaint) посередине, сверху — HUD с фишками
+/// игроков и номером хода, снизу — кнопки «Отменить» и «Сдаться». AppBar
+/// показывает набор правил и размер доски, а также кнопки «Подсказка» и
+/// «Заново».
 class RendzuSessionPage extends StatefulWidget {
   const RendzuSessionPage({
     super.key,
@@ -439,6 +572,7 @@ class RendzuSessionPage extends StatefulWidget {
 class _RendzuSessionPageState extends State<RendzuSessionPage> {
   late final RendzuController _controller;
   bool _winShown = false;
+  bool _hintVisible = false;
 
   @override
   void initState() {
@@ -451,6 +585,7 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
       boardSize: widget.boardSize,
       network: widget.network,
     );
+    _controller.addListener(_onControllerChanged);
     if (widget.network != null) {
       _controller.startNetwork();
     } else if (widget.vsAi) {
@@ -460,8 +595,27 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
     }
   }
 
+  void _onControllerChanged() {
+    if (!mounted) return;
+    final warning = _controller.warning;
+    if (warning != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(warning),
+            backgroundColor: const Color(0xFFE27D60),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        _controller.clearWarning();
+      });
+    }
+  }
+
   @override
   void dispose() {
+    _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -473,7 +627,19 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
     }
   }
 
-  void _showEndDialog() {
+  void _showHint() {
+    if (_controller.isOver || !_controller.canInteract) return;
+    _controller.showHint();
+    if (_controller.hintPoint == null) return;
+    setState(() => _hintVisible = true);
+    Future<void>.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _hintVisible = false);
+    });
+  }
+
+  /// Диалог результата: показывает, каким ходом и кто победил. Кнопки «Играть
+  /// снова», «Отменить ход» (только офлайн, если есть что отменять) и «В меню».
+  Future<void> _showEndDialog() async {
     if (!mounted) return;
     final isDraw = _controller.isDraw;
     final winner = _controller.winnerColor;
@@ -482,48 +648,122 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
         : (_controller.mode == RendzuMode.ai
             ? winner == widget.humanColor
             : true);
-    final winnerName =
-        winner == StoneColor.black ? 'Чёрные' : 'Белые';
-    final title = isDraw
-        ? 'Ничья!'
-        : (iWon
-            ? (_controller.mode == RendzuMode.local
-                ? 'Победили $winnerName!'
-                : 'Ты молодец!')
-            : 'Партия окончена');
-    final message = isDraw
-        ? 'Доска заполнилась — никто не собрал пять. Сыграйте ещё раз!'
-        : (iWon
-            ? 'Отличная партия! Пять в ряд — так держать ✨'
-            : 'Не беда — в следующий раз обязательно получится!');
-    showDianaDialog<bool>(
+    final winnerName = winner == StoneColor.black ? 'Чёрные' : 'Белые';
+    final cfg = _controller;
+    final moveNo = cfg.moveNumber;
+    final lastMove = cfg.lastMove;
+    final line = cfg.winningLine;
+
+    String title;
+    String message;
+    bool calm = false;
+    if (isDraw) {
+      title = 'Ничья!';
+      message = 'Доска заполнена, никто не собрал пять. Попробуем ещё раз?';
+      calm = true;
+    } else {
+      if (_controller.mode == RendzuMode.ai) {
+        title = iWon ? 'Ты молодец!' : 'Отличная партия!';
+      } else {
+        title = '$winnerName победили!';
+      }
+      final direction = _describeDirection(line);
+      final pointStr = lastMove != null
+          ? 'ходом №$moveNo в клетку (${lastMove.x + 1}, ${lastMove.y + 1})'
+          : 'последним ходом';
+      if (_controller.mode == RendzuMode.ai && iWon) {
+        message =
+            'Ты собрал пять в ряд — $direction, $pointStr. Так держать!';
+      } else if (_controller.mode == RendzuMode.ai && !iWon) {
+        message = 'Компьютер собрал пять в ряд — $direction, $pointStr. '
+            'В следующий раз обязательно получится!';
+      } else {
+        message = '$winnerName собрали пять в ряд — $direction, '
+            '$pointStr. Здорово сыграно!';
+      }
+    }
+
+    final canUndoOffline = _controller.mode != RendzuMode.network &&
+        _controller.moveNumber > 0;
+
+    final choice = await showDianaDialog<_ResultChoice>(
       context: context,
       title: title,
       barrierDismissible: false,
-      content: Text(
-        message,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _Celebration(calm: calm),
+          const SizedBox(height: 14),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: dialogTextStyle,
+          ),
+        ],
+      ),
+      actions: [
+        const DianaDialogButton<_ResultChoice>(
+          label: 'Играть снова',
+          value: _ResultChoice.again,
+          primary: true,
+        ),
+        if (canUndoOffline)
+          const DianaDialogButton<_ResultChoice>(
+            label: 'Отменить ход',
+            value: _ResultChoice.undo,
+          ),
+        const DianaDialogButton<_ResultChoice>(
+          label: 'В меню',
+          value: _ResultChoice.home,
+        ),
+      ],
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case _ResultChoice.again:
+        setState(() => _winShown = false);
+        _controller.playAgain();
+      case _ResultChoice.undo:
+        setState(() => _winShown = false);
+        _controller.undo();
+      case _ResultChoice.home:
+        Navigator.of(context).maybePop();
+      case null:
+        break;
+    }
+  }
+
+  /// Человеческое описание направления победной линии.
+  String _describeDirection(List<Point> line) {
+    if (line.length < 2) return 'пять в ряд';
+    final a = line.first;
+    final b = line.last;
+    final dx = b.x - a.x;
+    final dy = b.y - a.y;
+    if (dy == 0) return 'по горизонтали';
+    if (dx == 0) return 'по вертикали';
+    if ((dx > 0 && dy > 0) || (dx < 0 && dy < 0)) return 'по диагонали ↘';
+    return 'по диагонали ↗';
+  }
+
+  void _confirmRestart() {
+    showDianaDialog<bool>(
+      context: context,
+      title: 'Начать заново?',
+      content: const Text(
+        'Текущая партия будет потеряна.',
         textAlign: TextAlign.center,
         style: dialogTextStyle,
       ),
-      actions: [
-        DianaDialogButton<bool>(
-          label: 'Играть снова',
-          key: const Key('rendzu-play-again'),
-          value: true,
-          primary: true,
-        ),
-        const DianaDialogButton<bool>(label: 'В меню', value: false),
+      actions: const [
+        DianaDialogButton<bool>(label: 'Отмена', value: false),
+        DianaDialogButton<bool>(label: 'Заново', value: true, primary: true),
       ],
-    ).then((again) {
-      if (!mounted) return;
-      if (again == true && widget.network == null) {
-        // Офлайн: перезапускаем партию того же режима.
-        setState(() {
-          _winShown = false;
-          _controller.playAgain();
-        });
-      } else {
-        Navigator.of(context).maybePop();
+    ).then((ok) {
+      if (ok == true) {
+        setState(() => _winShown = false);
+        _controller.playAgain();
       }
     });
   }
@@ -533,53 +773,49 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
       context: context,
       title: 'Сдаться?',
       content: const Text(
-        'Партия закончится, победа достанется сопернику.',
+        'Ты проиграешь эту партию.',
         textAlign: TextAlign.center,
         style: dialogTextStyle,
       ),
       actions: const [
-        DianaDialogButton<bool>(label: 'Не сдаваться', value: false, primary: true),
-        DianaDialogButton<bool>(label: 'Сдаться', value: true),
+        DianaDialogButton<bool>(label: 'Отмена', value: false),
+        DianaDialogButton<bool>(label: 'Сдаюсь', value: true, primary: true),
       ],
-    ).then((resign) {
-      if (resign == true) _controller.resign();
+    ).then((ok) {
+      if (ok == true) _controller.resign();
     });
   }
 
-  bool get _canResign => !_controller.isOver && _controller.mode != RendzuMode.local;
+  bool get _canResign => !_controller.isOver;
 
   @override
   Widget build(BuildContext context) {
     _maybeShowWin();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Рэндзю для Дианы'),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            '${widget.ruleset.russianName} · ${widget.boardSize.russianName}',
+            style: const TextStyle(fontSize: 17),
+          ),
+        ),
         actions: [
-          ListenableBuilder(
-            listenable: widget.settings,
-            builder: (context, _) => IconButton(
-              key: const Key('sound-toggle'),
-              tooltip:
-                  widget.settings.sound ? 'Выключить звук' : 'Включить звук',
-              onPressed: () =>
-                  widget.settings.setSound(!widget.settings.sound),
-              icon: Icon(
-                widget.settings.sound
-                    ? Icons.volume_up_rounded
-                    : Icons.volume_off_rounded,
-                color: purple,
-              ),
-            ),
+          IconButton(
+            tooltip: 'Подсказка',
+            icon: const Icon(Icons.lightbulb_outline_rounded),
+            onPressed: (_controller.isOver ||
+                    !_controller.hintsEnabled ||
+                    !_controller.canInteract)
+                ? null
+                : _showHint,
           ),
           IconButton(
-            icon: const Icon(Icons.flag_outlined),
-            tooltip: 'Сдаться',
-            onPressed: _canResign ? _confirmResign : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.home_rounded),
-            tooltip: 'В меню',
-            onPressed: () => Navigator.of(context).maybePop(),
+            tooltip: 'Заново',
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: _controller.mode == RendzuMode.network
+                ? null
+                : _confirmRestart,
           ),
           const SizedBox(width: 4),
         ],
@@ -596,10 +832,7 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
                     padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
                     child: Column(
                       children: [
-                        _playersStrip(),
-                        const SizedBox(height: 6),
-                        _statusStrip(),
-                        const SizedBox(height: 6),
+                        _Hud(controller: _controller),
                         Expanded(
                           child: Center(
                             child: LayoutBuilder(
@@ -610,15 +843,41 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
                                     .clamp(220.0, 520.0);
                                 return _BoardSurface(
                                   size: boardPx,
-                                  controller: _controller,
-                                  onTap: (p) => _controller.tap(p),
+                                  board: _controller.board,
+                                  lastMove: _controller.lastMove,
+                                  winningLine: _controller.winningLine,
+                                  forbiddenHints:
+                                      _controller.hintsEnabled &&
+                                              widget.ruleset == Ruleset.renju
+                                          ? _controller.forbiddenHints
+                                          : const <Point>{},
+                                  patternThrees:
+                                      _controller.patternHighlightEnabled
+                                          ? _controller.patternThrees
+                                          : const <List<Point>>[],
+                                  patternFours:
+                                      _controller.patternHighlightEnabled
+                                          ? _controller.patternFours
+                                          : const <List<Point>>[],
+                                  hintPoint:
+                                      _hintVisible ? _controller.hintPoint : null,
+                                  onTap: (p) {
+                                    _controller.tap(p);
+                                    if (_hintVisible) {
+                                      setState(() => _hintVisible = false);
+                                    }
+                                  },
                                 );
                               },
                             ),
                           ),
                         ),
-                        const SizedBox(height: 6),
-                        _bottomBar(),
+                        _Controls(
+                          canUndo: _controller.canUndo,
+                          canResign: _canResign,
+                          onUndo: _controller.undo,
+                          onResign: _confirmResign,
+                        ),
                       ],
                     ),
                   );
@@ -630,126 +889,100 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
       ),
     );
   }
+}
 
-  /// Строка с двумя фишками игроков: чёрные и белые. Активный игрок подсвечен
-  /// бейджем «ХОД». В локальном режиме обе фишки «человеческие», сверху чёрные,
-  /// снизу белые — так двое на одном устройстве каждый видят свою сторону.
-  Widget _playersStrip() => Row(
+enum _ResultChoice { again, undo, home }
+
+/// Верхний HUD: две фишки игроков по краям, в центре — номер хода и подпись
+/// «чей ход». Активный игрок подсвечен жёлтой рамкой.
+class _Hud extends StatelessWidget {
+  const _Hud({required this.controller});
+  final RendzuController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = controller.currentColor;
+    final isBlack = current == StoneColor.black;
+    final isVsComputer = controller.mode == RendzuMode.ai;
+    final isNetwork = controller.mode == RendzuMode.network;
+    final humanTurn = controller.canInteract;
+    final moveNo = controller.moveNumber + (controller.isOver ? 0 : 1);
+    // Подпись «чей ход» — только против компьютера или по сети, как в
+    // оригинале. Вдвоём на одном устройстве достаточно номера хода.
+    String? centerLabel;
+    if (controller.busy) {
+      centerLabel = 'Думает компьютер…';
+    } else if (controller.isOver) {
+      centerLabel = 'Партия окончена';
+    } else if (isVsComputer) {
+      centerLabel = humanTurn ? 'Твой ход' : 'Думает компьютер…';
+    } else if (isNetwork) {
+      centerLabel = humanTurn ? 'Твой ход' : 'Ходит друг…';
+    }
+    final centerLabelColor = humanTurn && !controller.isOver
+        ? purple
+        : const Color(0xFFE27D60);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
         children: [
           Expanded(
             child: _PlayerChip(
               color: StoneColor.black,
-              name: _controller.playerName(StoneColor.black),
-              active: _controller.currentColor == StoneColor.black &&
-                  !_controller.isOver,
-              moveCount: _controller.moveNumber,
+              name: controller.playerName(StoneColor.black),
+              active: isBlack && !controller.isOver,
+              moveCount: moveNo,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 104,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    'Ход $moveNo',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: muted,
+                    ),
+                  ),
+                ),
+                if (centerLabel != null) ...[
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      centerLabel,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: centerLabelColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: _PlayerChip(
               color: StoneColor.white,
-              name: _controller.playerName(StoneColor.white),
-              active: _controller.currentColor == StoneColor.white &&
-                  !_controller.isOver,
-              moveCount: _controller.moveNumber,
+              name: controller.playerName(StoneColor.white),
+              active: !isBlack && !controller.isOver,
+              moveCount: moveNo,
             ),
           ),
         ],
-      );
-
-  /// Подпись состояния: «Твой ход» / «Ходит друг…» / «Ход компьютера…» / текст
-  /// предупреждения о запрещённом ходе.
-  Widget _statusStrip() => ListenableBuilder(
-        listenable: _controller,
-        builder: (context, _) {
-          final warning = _controller.warning;
-          final status = _controller.status;
-          final busy = _controller.busy;
-          String text;
-          Color? bg;
-          if (warning != null) {
-            text = warning;
-            bg = const Color(0xFFFCE3DA);
-          } else if (status != null) {
-            text = status;
-            bg = const Color(0xFFEDE6FF);
-          } else if (busy) {
-            text = 'Компьютер думает…';
-          } else {
-            text = _controller.turnLabel;
-          }
-          return AnimatedSwitcher(
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              key: ValueKey('$text$bg'),
-              height: 38,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: bg ?? const Color(0xFFFFFCF6),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: bg != null
-                      ? const Color(0xFFE3C5B5)
-                      : const Color(0xFFF1EAE5),
-                ),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                text,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: bg != null ? const Color(0xFFB45B3A) : ink,
-                ),
-              ),
-            ),
-          );
-        },
-      );
-
-  Widget _bottomBar() => ListenableBuilder(
-        listenable: _controller,
-        builder: (context, _) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _CtrlButton(
-                    icon: Icons.undo_rounded,
-                    label: 'Отменить',
-                    enabled: _controller.canUndo,
-                    onTap: _controller.undo,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _CtrlButton(
-                    icon: Icons.lightbulb_rounded,
-                    label: 'Подсказка',
-                    enabled: _controller.hintsEnabled &&
-                        _controller.canInteract,
-                    onTap: _controller.showHint,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _CtrlButton(
-                    icon: Icons.refresh_rounded,
-                    label: 'Заново',
-                    enabled: _controller.mode != RendzuMode.network,
-                    onTap: _controller.playAgain,
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      );
+      ),
+    );
+  }
 }
 
 /// Фишка игрока: цветной кружок, имя и бейдж «ХОД».
@@ -769,34 +1002,37 @@ class _PlayerChip extends StatelessWidget {
   Widget build(BuildContext context) => AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: active
-              ? const Color(0xFFEDE5FD)
+              ? yellow.withValues(alpha: .30)
               : Colors.white.withValues(alpha: .85),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: active ? const Color(0xFFB9A3EF) : const Color(0xFFF1EAE5),
-            width: 2,
+            color: active ? yellow : const Color(0xFFE3D8F5),
+            width: active ? 2.5 : 1,
           ),
         ),
         child: Row(
           children: [
             _SideDot(black: color == StoneColor.black),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      color: ink,
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: ink,
+                      ),
                     ),
                   ),
                   Text(
@@ -837,66 +1073,58 @@ class _SideDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 30,
-        height: 30,
+        width: 28,
+        height: 28,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+          gradient: RadialGradient(
+            center: const Alignment(-0.3, -0.3),
+            radius: 0.9,
             colors: black
-                ? [const Color(0xFF5A4E78), const Color(0xFF221B33)]
-                : [Colors.white, const Color(0xFFEFE3C8)],
+                ? [const Color(0xFF6A6677), const Color(0xFF2A2733)]
+                : [Colors.white, const Color(0xFFFBFBF6), const Color(0xFFCEB998)],
+            stops: black ? const [0.0, 1.0] : const [0.0, 0.7, 1.0],
           ),
           border: Border.all(
-            color: black ? const Color(0xFF221B33) : const Color(0xFFC9B68C),
+            color: black ? const Color(0xFF1E1B26) : const Color(0xFFC9B68C),
             width: 1.5,
           ),
         ),
       );
 }
 
-class _CtrlButton extends StatelessWidget {
-  const _CtrlButton({
-    required this.icon,
-    required this.label,
-    required this.enabled,
-    required this.onTap,
+class _Controls extends StatelessWidget {
+  const _Controls({
+    required this.canUndo,
+    required this.canResign,
+    required this.onUndo,
+    required this.onResign,
   });
-  final IconData icon;
-  final String label;
-  final bool enabled;
-  final VoidCallback onTap;
+  final bool canUndo;
+  final bool canResign;
+  final VoidCallback onUndo;
+  final VoidCallback onResign;
 
   @override
-  Widget build(BuildContext context) => Opacity(
-        opacity: enabled ? 1 : 0.4,
-        child: Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          child: InkWell(
-            onTap: enabled ? onTap : null,
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              height: 54,
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, color: purple, size: 22),
-                  const SizedBox(height: 2),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                      color: ink,
-                    ),
-                  ),
-                ],
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            TextButton.icon(
+              onPressed: canUndo ? onUndo : null,
+              icon: const Icon(Icons.undo_rounded),
+              label: const Text('Отменить'),
+            ),
+            TextButton.icon(
+              onPressed: canResign ? onResign : null,
+              icon: const Icon(Icons.flag_outlined),
+              label: const Text('Сдаться'),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFE27D60),
               ),
             ),
-          ),
+          ],
         ),
       );
 }
@@ -906,24 +1134,36 @@ class _CtrlButton extends StatelessWidget {
 class _BoardSurface extends StatelessWidget {
   const _BoardSurface({
     required this.size,
-    required this.controller,
+    required this.board,
+    required this.lastMove,
+    required this.winningLine,
+    required this.forbiddenHints,
+    required this.patternThrees,
+    required this.patternFours,
+    required this.hintPoint,
     required this.onTap,
   });
 
   final double size;
-  final RendzuController controller;
+  final Board board;
+  final Point? lastMove;
+  final List<Point> winningLine;
+  final Set<Point> forbiddenHints;
+  final List<List<Point>> patternThrees;
+  final List<List<Point>> patternFours;
+  final Point? hintPoint;
   final void Function(Point) onTap;
 
   @override
   Widget build(BuildContext context) {
-    final cell = size / controller.board.size;
+    final cell = size / board.size;
     return GestureDetector(
       onTapDown: (details) {
         final local = details.localPosition;
         final ix = ((local.dx / cell) - 0.5).round();
         final iy = ((local.dy / cell) - 0.5).round();
         final p = Point(ix, iy);
-        if (p.inBounds(controller.board.size)) {
+        if (p.inBounds(board.size)) {
           onTap(p);
         }
       },
@@ -932,14 +1172,14 @@ class _BoardSurface extends StatelessWidget {
         height: size,
         child: CustomPaint(
           painter: _BoardPainter(
-            board: controller.board,
+            board: board,
             cell: cell,
-            lastMove: controller.lastMove,
-            winningLine: controller.winningLine,
-            forbiddenHints: controller.forbiddenHints,
-            patternThrees: controller.patternThrees,
-            patternFours: controller.patternFours,
-            hintPoint: controller.hintPoint,
+            lastMove: lastMove,
+            winningLine: winningLine,
+            forbiddenHints: forbiddenHints,
+            patternThrees: patternThrees,
+            patternFours: patternFours,
+            hintPoint: hintPoint,
           ),
         ),
       ),
@@ -972,16 +1212,19 @@ class _BoardPainter extends CustomPainter {
   final Point? hintPoint;
 
   // Деревянная палитра как в шашках и исходной «Рэндзю для Дианы».
-  static const Color _woodLight = Color(0xFFE7C58E);
-  static const Color _woodDark = Color(0xFFC99E63);
-  static const Color _line = Color(0xFF7B4E2A);
-  static const Color _blackHi = Color(0xFF6E5A8A);
-  static const Color _black = Color(0xFF1B1530);
-  static const Color _whiteEdge = Color(0xFFC9B68C);
+  static const Color _woodLight = Color(0xFFB07A45);
+  static const Color _woodDark = Color(0xFF8C5831);
+  static const Color _line = Color(0xFFF0D9A8);
+  static const Color _blackHi = Color(0xFF6A6677);
+  static const Color _black = Color(0xFF2A2733);
+  static const Color _white = Color(0xFFFBFBF6);
+  static const Color _whiteEdge = Color(0xFFCEB998);
   static const Color _threeHi = Color(0xFFFFD66D);
   static const Color _fourHi = Color(0xFFE27D60);
 
-  static const double _stoneRadiusFactor = 0.42;
+  // Радиус камня — строго меньше половины клетки, чтобы соседние камни
+  // не перекрывали друг друга.
+  static const double _stoneRadiusFactor = 0.40;
 
   Offset centerOf(Point p) => Offset(cell * (p.x + 0.5), cell * (p.y + 0.5));
 
@@ -1021,7 +1264,7 @@ class _BoardPainter extends CustomPainter {
       canvas.drawLine(Offset(first.dx, ry), Offset(last.dx, ry), linePaint);
     }
 
-    // 3. Звёздные точки.
+    // 3. Звёздные точки (как в го).
     final starPaint = Paint()..color = _line;
     for (final p in _starPoints(board.size)) {
       canvas.drawCircle(centerOf(p), board.size <= 9 ? 3.0 : 3.5, starPaint);
@@ -1133,8 +1376,10 @@ class _BoardPainter extends CustomPainter {
       radius: 0.95,
       colors: color == StoneColor.black
           ? const [_blackHi, _black]
-          : const [Colors.white, Color(0xFFF1E6CC), _whiteEdge],
-      stops: color == StoneColor.black ? const [0.0, 1.0] : const [0.0, 0.7, 1.0],
+          : const [_white, _white, _whiteEdge],
+      stops: color == StoneColor.black
+          ? const [0.0, 1.0]
+          : const [0.0, 0.7, 1.0],
     );
     final rect = Rect.fromCircle(center: center, radius: radius);
     canvas.drawCircle(center, radius, Paint()..shader = grad.createShader(rect));
@@ -1179,4 +1424,43 @@ class _BoardPainter extends CustomPainter {
       old.patternThrees != patternThrees ||
       old.patternFours != patternFours ||
       old.hintPoint != hintPoint;
+}
+
+/// Конфетти-празднование в диалоге победы — дословно из оригинала.
+class _Celebration extends StatefulWidget {
+  const _Celebration({this.calm = false});
+  final bool calm;
+  @override
+  State<_Celebration> createState() => _CelebrationState();
+}
+
+class _CelebrationState extends State<_Celebration>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.calm) {
+      return Icon(
+        Icons.handshake_rounded,
+        size: 56,
+        color: muted.withValues(alpha: .5),
+      );
+    }
+    return ScaleTransition(
+      scale: Tween(begin: .85, end: 1.1).animate(
+        CurvedAnimation(parent: _c, curve: Curves.elasticOut),
+      ),
+      child: const Icon(Icons.celebration_rounded, size: 56, color: yellow),
+    );
+  }
 }

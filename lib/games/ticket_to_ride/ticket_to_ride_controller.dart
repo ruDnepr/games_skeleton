@@ -19,6 +19,31 @@ enum TtrMode { local, computer, network }
 /// по сети. Нужно, чтобы интерфейс показывал правильную подсказку.
 enum TtrActive { me, computer, friend, nobody }
 
+/// Одна запись истории партии: кто и что сделал. Текст — готовый, для ленты
+/// истории на экране. Список таких записей хранится в контроллере и сбрасывается
+/// на новой партии.
+@immutable
+class TtrMoveRecord {
+  const TtrMoveRecord({
+    required this.seat,
+    required this.text,
+    required this.kind,
+  });
+
+  /// Чей это был ход: 0 или 1.
+  final int seat;
+
+  /// Готовая подпись: «Аня заняла Москва — Тверь (+3)» и так далее.
+  final String text;
+
+  /// Тип действия: `claim`, `drawFaceUp`, `drawDeck`, `drawDestinations`,
+  /// `keepDestinations`. Нужен, чтобы лента могла раскрасить строку.
+  final String kind;
+
+  @override
+  String toString() => '[$seat] $text';
+}
+
 /// Контроллер партии «Билета на поезд». Содержит состояние, историю, звук и
 /// сеть; интерфейс только рисует то, что контроллер ему отдаёт, и зовёт его
 /// методы.
@@ -149,6 +174,12 @@ class TicketToRideController extends ChangeNotifier {
   String? fatalMessage;
   int? hintedRouteIndex;
 
+  /// Лента хода партии. Каждая запись — это одно действие игрока или
+  /// компьютера: текст готов для экрана. История растёт по мере ходов и
+  /// сбрасывается в начале новой партии.
+  final List<TtrMoveRecord> _history = <TtrMoveRecord>[];
+  List<TtrMoveRecord> get history => List.unmodifiable(_history);
+
   /// Снимки состояний перед каждым действием — для отмены (офлайн и против
   /// компьютера). По сети отмена не работает: у клиента нет чужой руки, чтобы
   /// восстановить позицию, а у хоста нет согласия клиента.
@@ -173,6 +204,7 @@ class TicketToRideController extends ChangeNotifier {
         : [settings.nickname, 'Компьютер'];
     _state = _rules.newGame(random: _rng, playerNames: names);
     _undo.clear();
+    _history.clear();
     notice = null;
     fatalMessage = null;
     _resignedWinner = null;
@@ -202,6 +234,7 @@ class TicketToRideController extends ChangeNotifier {
       final names = [settings.nickname, network?.peerName ?? 'Друг'];
       _state = _rules.newGame(random: _rng, playerNames: names);
       _undo.clear();
+      _history.clear();
       notice = null;
       fatalMessage = null;
       _resignedWinner = null;
@@ -217,6 +250,7 @@ class TicketToRideController extends ChangeNotifier {
     } else {
       // Клиент: состояние пришлёт хост первым снимком. Пока покажем заглушку.
       _state = null;
+      _history.clear();
       notifyListeners();
     }
   }
@@ -237,7 +271,7 @@ class TicketToRideController extends ChangeNotifier {
     _applyLocalAction(const TtrAction.drawDeck());
   }
 
-  void claimRoute(int routeIndex) {
+  void claimRoute(int routeIndex, {int? locomotiveCount}) {
     if (!canInteract) return;
     if (phase != TtrPhase.main) return;
     if (!_rules.canClaimRoute(state, mySeat, routeIndex)) {
@@ -247,7 +281,31 @@ class TicketToRideController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _applyLocalAction(TtrAction.claim(routeIndex));
+    // Если игрок передал число локомотивов — дополнительно проверим, что оно
+    // укладывается в то, что есть в руке. Правила тоже проверят, но здесь мы
+    // можем дать понятное уведомление вместо StateError.
+    if (locomotiveCount != null) {
+      final route = state.routes[routeIndex];
+      final colorCount = myHand.where((c) => c.color == route.color).length;
+      final locoCount = myHand
+          .where((c) => c.color == CardColor.locomotive)
+          .length;
+      if (locomotiveCount < 0 || locomotiveCount > locoCount) {
+        notice = 'Локомотивов в руке всего $locoCount.';
+        notifyListeners();
+        return;
+      }
+      final colorNeeded = route.length - locomotiveCount;
+      if (colorNeeded < 0 || colorNeeded > colorCount) {
+        notice = 'Не хватит карт: нужно $colorNeeded ${route.color.russianName
+            .toLowerCase()}, а есть $colorCount.';
+        notifyListeners();
+        return;
+      }
+    }
+    _applyLocalAction(
+      TtrAction.claim(routeIndex, locomotiveCount: locomotiveCount),
+    );
   }
 
   String _explainClaimFail(Route route) {
@@ -315,6 +373,7 @@ class TicketToRideController extends ChangeNotifier {
       final next = _rules.applyAction(before, mySeat, action);
       _undo.add(before);
       _state = next;
+      _history.add(_recordFor(action, before, next, before.turn));
       _playActionSound(beforeClaim, next, action);
       hintedRouteIndex = null;
       notice = _noticeForAction(action, beforeClaim, next);
@@ -399,6 +458,65 @@ class TicketToRideController extends ChangeNotifier {
     }
   }
 
+  /// Готовит одну запись истории для действия [action]. Текст зависит от типа
+  /// действия и от того, как поменялось состояние: например, для занятия
+  /// маршрута — «занял Москва — Тверь (+3)», для взятия карты — «взял карту».
+  /// Имя игрока подставляет сам экран: здесь — только нейтральный текст,
+  /// потому что один и тот же контроллер работает и для хоста, и для клиента.
+  TtrMoveRecord _recordFor(
+    TtrAction action,
+    GameState before,
+    GameState after,
+    int seat,
+  ) {
+    switch (action.kind) {
+      case 'claim':
+        final route = before.routes[action.routeIndex!];
+        final completed = <String>[];
+        for (final d in after.players[seat].destinations) {
+          if (!_rules.isDestinationCompleted(before, seat, d) &&
+              _rules.isDestinationCompleted(after, seat, d)) {
+            completed.add('${d.from.russianName} — ${d.to.russianName}');
+          }
+        }
+        var text = 'занял ${route.cityA.russianName} — '
+            '${route.cityB.russianName} (+${route.points})';
+        if (completed.isNotEmpty) {
+          text += '. Путешествие: ${completed.join(", ")}';
+        }
+        return TtrMoveRecord(seat: seat, text: text, kind: action.kind);
+      case 'drawFaceUp':
+        final card = before.faceUpCards[action.faceUpIndex!];
+        return TtrMoveRecord(
+          seat: seat,
+          text: 'взял открытую карту: ${card.color.russianName.toLowerCase()}',
+          kind: action.kind,
+        );
+      case 'drawDeck':
+        return TtrMoveRecord(
+          seat: seat,
+          text: 'взял карту из колоды',
+          kind: action.kind,
+        );
+      case 'drawDestinations':
+        return TtrMoveRecord(
+          seat: seat,
+          text: 'тянет путешествия',
+          kind: action.kind,
+        );
+      case 'keepDestinations':
+        final kept = after.players[seat].destinations.length -
+            before.players[seat].destinations.length;
+        return TtrMoveRecord(
+          seat: seat,
+          text: 'оставил $kept путешестви${kept == 1 ? "е" : "й"}',
+          kind: action.kind,
+        );
+      default:
+        return TtrMoveRecord(seat: seat, text: 'сходил', kind: 'unknown');
+    }
+  }
+
   // ---- Продвижение партии: ответ компьютера --------------------------------
 
   /// Следующий шаг: если ход компьютера — думаем и действуем. В сети хост
@@ -444,6 +562,7 @@ class TicketToRideController extends ChangeNotifier {
       final next = _rules.applyAction(before, state.turn, action);
       _undo.add(before);
       _state = next;
+      _history.add(_recordFor(action, before, next, before.turn));
       _playActionSound(beforeClaim, next, action);
       notice = _noticeForAction(action, beforeClaim, next);
       final stillComputer = state.turn != mySeat &&
@@ -547,9 +666,17 @@ class TicketToRideController extends ChangeNotifier {
       _undo.removeLast(); // ход компьютера
       final prev = _undo.removeLast();
       _state = prev;
+      // История: снимаем две последние записи — ход компьютера и свой.
+      if (_history.length >= 2) {
+        _history.removeLast();
+        _history.removeLast();
+      } else if (_history.isNotEmpty) {
+        _history.removeLast();
+      }
     } else {
       final prev = _undo.removeLast();
       _state = prev;
+      if (_history.isNotEmpty) _history.removeLast();
     }
     hintedRouteIndex = null;
     notice = 'Ход отменён';
@@ -562,6 +689,7 @@ class TicketToRideController extends ChangeNotifier {
     if (isOver) return;
     if (mode == TtrMode.local) return;
     _resignedWinner = opponentSeat;
+    _markResigned();
     if (_isNetwork) {
       try {
         network!.service.send(const NetworkMessage('resign'));
@@ -570,6 +698,19 @@ class TicketToRideController extends ChangeNotifier {
       }
     }
     unawaited(_onWin());
+  }
+
+  /// Помечает состояние партии как оконченное: фаза `over`, победитель —
+  /// `_resignedWinner`. Нужно, чтобы экран увидел `isOver` и показал диалог
+  /// результата сразу после сдачи, не дожидаясь окончания хода.
+  void _markResigned() {
+    if (_state == null) return;
+    if (_resignedWinner == null) return;
+    _state = _state!.copyWith(
+      phase: TtrPhase.over,
+      winner: _resignedWinner,
+    );
+    notifyListeners();
   }
 
   // ---- Победа --------------------------------------------------------------
@@ -642,6 +783,7 @@ class TicketToRideController extends ChangeNotifier {
       final next = _rules.applyAction(before, 1, action);
       _undo.add(before);
       _state = next;
+      _history.add(_recordFor(action, before, next, 1));
       _playActionSound(beforeClaim, next, action);
       notice = _noticeForAction(action, beforeClaim, next);
       hintedRouteIndex = null;
@@ -695,6 +837,7 @@ class TicketToRideController extends ChangeNotifier {
       case 'resign':
         // Соперник сдался — победа за этим устройством.
         _resignedWinner = mySeat;
+        _markResigned();
         unawaited(_onWin());
         break;
       case 'disconnected':
