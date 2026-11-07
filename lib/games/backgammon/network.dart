@@ -6,14 +6,23 @@ import 'engine/model.dart';
 /// партий его не меняют.
 const backgammonGameId = 'backgammon';
 
+/// Ключ, под которым хранится выбранный вариант нард.
+const backgammonVariantKey = 'variant';
+
 /// Что игра рассказывает сопернику о себе в рукопожатии. Для нард это
-/// переключатели отображения: подсветка ходов, номера пунктов и авто-бросок.
-/// Каждое устройство рисует по своим настройкам, но карта проверяется, чтобы
-/// чужое лобби не пустило в партию неразборчивые данные.
+/// переключатели отображения (подсветка ходов, номера пунктов, авто-бросок)
+/// и выбранный хостом вариант — короткие или длинные. Каждое устройство
+/// рисует по своим настройкам, но карта проверяется, чтобы чужое лобби не
+/// пустило в партию неразборчивые данные.
 Map<String, Object?> backgammonOptions(SettingsController settings) => {
   'hints': settings.flag(backgammonGameId, 'hints'),
   'numbers': settings.flag(backgammonGameId, 'numbers'),
   'autoRoll': settings.flag(backgammonGameId, 'autoRoll'),
+  'variant': settings.gameString(
+    backgammonGameId,
+    backgammonVariantKey,
+    'short',
+  ),
 };
 
 /// Опции нард после разбора. Значения — только то, что игра умеет.
@@ -22,17 +31,26 @@ class BackgammonOptions {
     required this.hints,
     required this.numbers,
     required this.autoRoll,
+    required this.variant,
   });
   final bool hints;
   final bool numbers;
   final bool autoRoll;
+
+  /// `'short'` или `'long'`. Хост выбирает вариант до создания сетевой игры;
+  /// клиент принимает тот, что пришёл в рукопожатии.
+  final String variant;
+
+  /// Тип варианта для движка.
+  BackgammonVariant get backgammonVariant =>
+      variant == 'long' ? BackgammonVariant.long : BackgammonVariant.short;
 }
 
 /// Разбирает опции соперника и бросает [FormatException] на чужое: неизвестные
 /// ключи, недостающие ключи, неверные типы. Транспорт зовёт это до начала
 /// партии, так что чужая игра или чужие данные отказываются у двери.
 BackgammonOptions backgammonParseOptions(Map<String, Object?> options) {
-  const allowed = {'hints', 'numbers', 'autoRoll'};
+  const allowed = {'hints', 'numbers', 'autoRoll', 'variant'};
   final unknown = options.keys.where((key) => !allowed.contains(key)).toList();
   if (unknown.isNotEmpty) {
     throw FormatException('Чужие настройки игры: ${unknown.join(', ')}');
@@ -40,10 +58,20 @@ BackgammonOptions backgammonParseOptions(Map<String, Object?> options) {
   final hints = options['hints'];
   final numbers = options['numbers'];
   final autoRoll = options['autoRoll'];
-  if (hints is! bool || numbers is! bool || autoRoll is! bool) {
+  final variant = options['variant'];
+  if (hints is! bool ||
+      numbers is! bool ||
+      autoRoll is! bool ||
+      variant is! String ||
+      (variant != 'short' && variant != 'long')) {
     throw const FormatException('Настройки игры не распознаны');
   }
-  return BackgammonOptions(hints: hints, numbers: numbers, autoRoll: autoRoll);
+  return BackgammonOptions(
+    hints: hints,
+    numbers: numbers,
+    autoRoll: autoRoll,
+    variant: variant,
+  );
 }
 
 /// Проверяет пришедший по сети ход. Это проверка формы, без состояния: транспорт

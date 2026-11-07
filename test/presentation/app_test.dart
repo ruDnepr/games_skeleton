@@ -43,7 +43,7 @@ void main() {
     expect(find.text('Время играть и улыбаться!'), findsNothing);
   });
 
-  testWidgets('«Играть» открывает список игр, карточка — выбор режима нард', (
+  testWidgets('«Играть» открывает список игр, карточка — выбор варианта нард', (
     tester,
   ) async {
     await pumpApp(tester);
@@ -53,16 +53,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('game-card-backgammon')), findsOneWidget);
-    expect(find.text('Короткие нарды'), findsOneWidget);
-    // В каталоге теперь две игры нард.
-    expect(find.byKey(const Key('game-card-long_backgammon')), findsOneWidget);
+    expect(find.text('Нарды'), findsOneWidget);
+    // Нарды в каталоге одни: короткие и длинные — варианты внутри.
+    expect(find.byKey(const Key('game-card-long_backgammon')), findsNothing);
 
     await tester.tap(find.byKey(const Key('game-card-backgammon')));
     await tester.pumpAndSettle();
 
-    expect(find.text('С кем сыграем?'), findsOneWidget);
-    expect(find.text('Против компьютера'), findsOneWidget);
-    expect(find.byKey(const Key('backgammon-start')), findsOneWidget);
+    // Сначала — выбор варианта.
+    expect(find.text('Какие нарды?'), findsOneWidget);
+    expect(find.text('Короткие нарды'), findsOneWidget);
+    expect(find.text('Длинные нарды'), findsOneWidget);
+    expect(find.byKey(const Key('backgammon-variant-next')), findsOneWidget);
 
     await tester.pageBack();
     await tester.pumpAndSettle();

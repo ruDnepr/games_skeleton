@@ -5,7 +5,6 @@ import '../games/definition.dart';
 import '../games/domino/game.dart';
 import '../games/go/game.dart';
 import '../games/loto/game.dart';
-import '../games/long_backgammon/game.dart';
 import '../games/rendzu/game.dart';
 import '../games/ticket_to_ride/game.dart';
 
@@ -22,7 +21,6 @@ class GameCatalog {
     rendzuGame,
     goGame,
     backgammonGame,
-    longBackgammonGame,
     battleshipGame,
     dominoGame,
     lotoGame,

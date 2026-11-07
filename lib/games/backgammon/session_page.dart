@@ -11,29 +11,134 @@ import 'engine/model.dart';
 import 'ui/backgammon_game.dart';
 import 'ui/dice_widget.dart';
 
-/// Точка входа в партию: с сетевым соединением — сразу партия по сети, без него —
-/// выбор режима (против компьютера или вдвоём на одном устройстве).
+/// Точка входа в партию: с сетевым соединением — сразу партия по сети тем
+/// вариантом, который выбрал хост, без него — выбор варианта, потом режима.
 class BackgammonEntryPage extends StatelessWidget {
   const BackgammonEntryPage({
     super.key,
     required this.settings,
     this.network,
-    this.variant = BackgammonVariant.short,
   });
   final SettingsController settings;
   final NetworkSession? network;
-  final BackgammonVariant variant;
 
   @override
   Widget build(BuildContext context) {
     if (network != null) {
+      // Вариант выбирает хост до создания сетевой игры; клиент принимает тот,
+      // что пришёл в рукопожатии.
+      final variantStr =
+          network!.lobby.options['variant'] as String? ?? 'short';
+      final variant = variantStr == 'long'
+          ? BackgammonVariant.long
+          : BackgammonVariant.short;
       return BackgammonSessionPage(
         settings: settings,
         network: network,
         variant: variant,
       );
     }
-    return BackgammonModePage(settings: settings, variant: variant);
+    return BackgammonVariantPage(settings: settings);
+  }
+}
+
+/// Выбор варианта нард: короткие или длинные. Показывается перед выбором
+/// режима (для локальной партии) или перед сетевым лобби (тогда [forNetwork]
+/// true, и выбор сохраняется в настройках, чтобы уехать в рукопожатие через
+/// [backgammonOptions]).
+class BackgammonVariantPage extends StatefulWidget {
+  const BackgammonVariantPage({
+    super.key,
+    required this.settings,
+    this.forNetwork = false,
+  });
+  final SettingsController settings;
+  final bool forNetwork;
+
+  @override
+  State<BackgammonVariantPage> createState() => _BackgammonVariantPageState();
+}
+
+class _BackgammonVariantPageState extends State<BackgammonVariantPage> {
+  late BackgammonVariant _variant;
+
+  @override
+  void initState() {
+    super.initState();
+    final stored = widget.settings.gameString(
+      backgammonGameId,
+      backgammonVariantKey,
+      'short',
+    );
+    _variant =
+        stored == 'long' ? BackgammonVariant.long : BackgammonVariant.short;
+  }
+
+  @override
+  Widget build(BuildContext context) => PageFrame(
+    title: 'Нарды',
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+      children: [
+        const Intro(
+          eyebrow: 'ВЫБЕРИ ВАРИАНТ',
+          title: 'Какие нарды?',
+          subtitle: 'Короткие — с выбиванием шашек. Длинные — гонка без '
+              'выбивания, все шашки на «голове».',
+        ),
+        const SizedBox(height: 22),
+        _ModeTile(
+          title: 'Короткие нарды',
+          subtitle: 'Выбиваешь шашки соперника и спешишь домой',
+          icon: Icons.casino_rounded,
+          color: const Color(0xFFFCE4D7),
+          selected: _variant == BackgammonVariant.short,
+          onTap: () => setState(() => _variant = BackgammonVariant.short),
+        ),
+        const SizedBox(height: 14),
+        _ModeTile(
+          title: 'Длинные нарды',
+          subtitle: 'Гонка без выбивания: строй блоки и спеши домой',
+          icon: Icons.donut_large_rounded,
+          color: const Color(0xFFEDE6FF),
+          selected: _variant == BackgammonVariant.long,
+          onTap: () => setState(() => _variant = BackgammonVariant.long),
+        ),
+        const SizedBox(height: 26),
+        SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: FilledButton.icon(
+            key: const Key('backgammon-variant-next'),
+            onPressed: () => _next(context),
+            icon: const Icon(Icons.arrow_forward_rounded),
+            label: Text(widget.forNetwork ? 'К сетевой игре' : 'Дальше'),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _next(BuildContext context) async {
+    await widget.settings.setGameString(
+      backgammonGameId,
+      backgammonVariantKey,
+      _variant == BackgammonVariant.long ? 'long' : 'short',
+    );
+    if (!mounted) return;
+    if (widget.forNetwork) {
+      // Выбор сделан — возвращаемся, чтобы открылось сетевое лобби.
+      Navigator.of(context).maybePop();
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BackgammonModePage(
+          settings: widget.settings,
+          variant: _variant,
+        ),
+      ),
+    );
   }
 }
 

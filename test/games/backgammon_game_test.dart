@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/catalog.dart';
 import 'package:games_for_diana/app/settings.dart';
+import 'package:games_for_diana/games/backgammon/engine/model.dart';
 import 'package:games_for_diana/games/backgammon/game.dart';
 import 'package:games_for_diana/games/backgammon/network.dart';
 import 'package:games_for_diana/network/protocol.dart';
@@ -74,6 +75,8 @@ void main() {
     final options = backgammonParseOptions(received.options);
     expect(options.hints, isTrue); // по умолчанию
     expect(options.numbers, isFalse);
+    expect(options.variant, 'short'); // вариант по умолчанию
+    expect(options.backgammonVariant, BackgammonVariant.short);
   });
 
   test('опции другой игры отвергаются', () {
@@ -90,14 +93,34 @@ void main() {
       () => backgammonParseOptions({'hints': 1, 'numbers': false}),
       throwsFormatException,
     );
-    // Полный набор проходит.
+    // Чужой вариант — отказ.
+    expect(
+      () => backgammonParseOptions({
+        'hints': false,
+        'numbers': true,
+        'autoRoll': true,
+        'variant': 'medium',
+      }),
+      throwsFormatException,
+    );
+    // Полный набор проходит — короткие и длинные.
     expect(
       backgammonParseOptions({
         'hints': false,
         'numbers': true,
         'autoRoll': true,
+        'variant': 'short',
       }).autoRoll,
       isTrue,
+    );
+    expect(
+      backgammonParseOptions({
+        'hints': false,
+        'numbers': true,
+        'autoRoll': true,
+        'variant': 'long',
+      }).backgammonVariant,
+      BackgammonVariant.long,
     );
   });
 

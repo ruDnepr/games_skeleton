@@ -98,10 +98,9 @@ class BackgammonController extends ChangeNotifier {
 
   // ---- Подсказки и номера пунктов -------------------------------------------
 
-  /// gameId, под которым читаются флаги настроек: у коротких и длинных нард
-  /// ключи раздельные, поэтому выбираем по варианту.
-  String get _flagGameId =>
-      variant == BackgammonVariant.long ? 'long_backgammon' : 'backgammon';
+  /// gameId, под которым читаются флаги настроек. Короткие и длинные нарды —
+  /// варианты одной игры, поэтому настройки общие и хранятся под одним id.
+  String get _flagGameId => 'backgammon';
 
   bool get hintsEnabled => settings.flag(_flagGameId, 'hints');
   bool get numbersEnabled => settings.flag(_flagGameId, 'numbers');

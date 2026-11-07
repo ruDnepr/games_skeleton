@@ -34,6 +34,14 @@ class GamesPage extends StatelessWidget {
 
   Future<void> _open(BuildContext context, GameDefinition game) async {
     if (_forNetwork) {
+      // Some games need a choice before the lobby opens — for example, the
+      // backgammon variant. The game stores the choice itself; the lobby then
+      // reads it through `game.options(settings)`.
+      final preNetwork = game.preNetwork;
+      if (preNetwork != null) {
+        await preNetwork(context, settings);
+        if (!context.mounted) return;
+      }
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => NetworkPage(settings: settings, game: game),
