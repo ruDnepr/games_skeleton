@@ -126,7 +126,7 @@ class _BackgammonVariantPageState extends State<BackgammonVariantPage> {
       backgammonVariantKey,
       _variant == BackgammonVariant.long ? 'long' : 'short',
     );
-    if (!mounted) return;
+    if (!context.mounted) return;
     if (widget.forNetwork) {
       // Выбор сделан — возвращаемся, чтобы открылось сетевое лобби.
       Navigator.of(context).maybePop();
