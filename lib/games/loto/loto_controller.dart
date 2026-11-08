@@ -360,6 +360,10 @@ class LotoController extends ChangeNotifier {
       Future<void>.delayed(const Duration(milliseconds: 350), () {
         if (_disposed || phase != LotoPhase.playing) return;
         _sendSnapshot();
+        // После снимка хост начинает авто-вытягивание бочонков — как
+        // компьютер-ведущий в локальных режимах. Клиент видит то, что
+        // объявил хост.
+        _scheduleDraw(setup.firstDrawDelay);
       });
     } else {
       myPlayerId = 'client';
@@ -535,6 +539,10 @@ class LotoController extends ChangeNotifier {
       _onWin(playerId);
     } else {
       notifyListeners();
+      // После закрытия числа кем-либо из игроков хост может снова тянуть
+      // бочонок: возможно, это закрытие разблокировало авто-вытягивание,
+      // которое ждало, пока человек закроет свой бочонок.
+      _afterMove();
     }
   }
 
@@ -722,7 +730,10 @@ class LotoController extends ChangeNotifier {
     _cancelDrawTimer();
     if (_disposed) return;
     if (mode.needsManualDraw) return;
-    if (mode == LotoMode.network) return; // сеть рисует через _drawNow по кнопке
+    // В сети хост — ведущий: он тянет бочонки и автоматически (как
+    // компьютер в локальных режимах), и кнопкой (если хочется поторопить).
+    // Клиент лишь показывает то, что объявил хост.
+    if (mode == LotoMode.network && !isHost) return;
     if (game.players.isEmpty || game.isOver || game.isBagEmpty) return;
     // Пока компьютерный соперник не закрыл свой бочонок, новый не тянем.
     if (_rivalTimer?.isActive ?? false) return;

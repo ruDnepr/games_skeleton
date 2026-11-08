@@ -601,7 +601,6 @@ class GoController extends ChangeNotifier {
           if (message.data['ply'] != state.ply ||
               message.data['before'] != state.fingerprint ||
               message.data['color'] != state.turn.name ||
-              isAnimating ||
               incomingUndoPly != null) {
             throw const FormatException('Разные позиции');
           }
@@ -616,8 +615,33 @@ class GoController extends ChangeNotifier {
             }
             move = GoMove.place(point, color: state.turn);
           }
+          // Ответный ход отменяет любой запрос на отмену: ход — это новая
+          // позиция, откатываться уже не к чему.
           waitingForUndo = false;
-          unawaited(_apply(move, remote: true));
+          // Если ещё идёт анимация предыдущего хода, не рвём связь: ход
+          // соперника мог прийти за миллисекунды до конца анимации на
+          // медленном устройстве. Прерывать анимацию нельзя — тогда
+          // отправляющая сторона не успеет отправить свой ход, и позиции
+          // разойдутся. Откладываем применение до конца текущей анимации.
+          if (isAnimating) {
+            // Анимация ещё идёт — откладываем применение хода.
+            // Retry каждые 50мс пока анимация не закончится.
+            final pending = move;
+            final gen = _generation;
+            void retry() {
+              if (_disposed || gen != _generation || fatalMessage != null) {
+                return;
+              }
+              if (isAnimating) {
+                Future<void>.delayed(const Duration(milliseconds: 50), retry);
+                return;
+              }
+              unawaited(_apply(pending, remote: true));
+            }
+            Future<void>.delayed(const Duration(milliseconds: 50), retry);
+          } else {
+            unawaited(_apply(move, remote: true));
+          }
         } catch (_) {
           _desync();
         }

@@ -92,7 +92,11 @@ CheckersOptions checkersParseOptions(Map<String, Object?> options) {
 /// учётом позиции) делает сама партия через `GameRules.apply`, когда применяет
 /// ход. Нелегальный ход там вызывает рассинхронизацию и понятное сообщение, а
 /// здесь отсекается мусор и чужой формат.
-void checkersValidateMove(Map<String, Object?> move) {
+void checkersValidateMove(Map<String, Object?> data) {
+  // Транспорт вызывает validateMove на message.data целиком. В шашках
+  // message.data = {ply, before, move: {from, path, captures}} — достаём
+  // вложенный ход, если он есть.
+  final move = data['move'] is Map ? Map<String, Object?>.from(data['move'] as Map) : data;
   // `from` — пара целых в пределах доски до 10×10.
   final from = move['from'];
   if (from is! List || from.length != 2) {

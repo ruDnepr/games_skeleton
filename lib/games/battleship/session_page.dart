@@ -184,11 +184,17 @@ class _BattleshipSetupPageState extends State<BattleshipSetupPage> {
 
   void _onNetworkEvent(NetworkMessage message) {
     if (!mounted) return;
+    if (_navigatedToPlay) return;
     if (message.type == 'event' && message.data['kind'] == 'fleetReady') {
       setState(() => _peerReady = true);
       _maybeStartNetwork();
     } else if (message.type == 'disconnected') {
-      _showFatal('Связь потеряна. Вернись в меню.');
+      // Если мы уже нажали «В бой!» — не показываем фатальную ошибку:
+      // контроллер партии сам обработает разрыв. fatal только если
+      // ещё не начали переход к партии.
+      if (!_myReady) {
+        _showFatal('Связь потеряна. Вернись в меню.');
+      }
     }
   }
 

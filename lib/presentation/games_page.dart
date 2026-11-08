@@ -17,13 +17,19 @@ const String gamesRouteName = 'games';
 /// и настройки. Используется кнопками «В меню»/«Выйти» во всех играх.
 ///
 /// В обычной картине стека `HomePage → GamesPage → EntryPage → … → SessionPage`
-/// остановится на `GamesPage` (маршрут с именем [gamesRouteName]). Если же
-/// `GamesPage` в стеке нет (например, в тестах, куда партию открывают напрямую),
-/// опускаемся до первого маршрута — чтобы не пытаться вытолкнуть последний
-/// маршрут и не сломать навигатор.
+/// остановится на `GamesPage` (маршрут с именем [gamesRouteName]).
+///
+/// `route.isFirst` оставлен как страховка: в тестах партию часто открывают
+/// напрямую, без `GamesPage` в стеке, и без страховки `popUntil` попытался бы
+/// вытолкнуть последний маршрут. В боевом приложении `GamesPage` всегда есть
+/// в стеке: оба пути из `HomePage` (Играть и Сетевая игра) толкают её с
+/// именем [gamesRouteName]. Когда `popToGamesList` зовут из сетевой партии,
+/// дополнительно см. `NetworkPage._openSession`: там проверяется, что лобби
+/// ещё в стеке, прежде чем звать `maybePop`, — иначе `maybePop` вытолкнул бы
+/// саму `GamesPage` следом.
 void popToGamesList(BuildContext context) {
   Navigator.of(context).popUntil(
-    (route) => route.settings.name == gamesRouteName || route.isFirst,
+    (route) => route.settings.name == gamesRouteName,
   );
 }
 

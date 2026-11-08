@@ -736,7 +736,6 @@ class CheckersController extends ChangeNotifier {
           if (message.data['ply'] != state.ply ||
               message.data['before'] != state.fingerprint ||
               state.turn != humanColor.opponent ||
-              isAnimating ||
               incomingUndoPly != null) {
             throw const FormatException('Разные позиции');
           }
@@ -747,7 +746,34 @@ class CheckersController extends ChangeNotifier {
           // Ответ на ход отменяет любой запрос на отмену: ход — это новая
           // позиция, откатываться уже не к чему.
           waitingForUndo = false;
-          unawaited(_apply(move, remote: true));
+          // Если ещё идёт анимация предыдущего хода, не рвём связь: ход
+          // соперника мог прийти за мгновения до конца анимации. Прерывать
+          // анимацию нельзя — тогда собственный ход не успеет уйти в сеть,
+          // и позиции разойдутся. Откладываем применение до конца текущей
+          // анимации.
+          if (isAnimating) {
+            final pending = move;
+            final gen = _generation;
+            Future<void>.delayed(const Duration(milliseconds: 30), () {
+              if (_disposed || gen != _generation || fatalMessage != null) {
+                return;
+              }
+              if (isAnimating) {
+                Future<void>.delayed(const Duration(milliseconds: 60), () {
+                  if (_disposed ||
+                      gen != _generation ||
+                      fatalMessage != null) {
+                    return;
+                  }
+                  unawaited(_apply(pending, remote: true));
+                });
+                return;
+              }
+              unawaited(_apply(pending, remote: true));
+            });
+          } else {
+            unawaited(_apply(move, remote: true));
+          }
         } catch (_) {
           _desync();
         }
