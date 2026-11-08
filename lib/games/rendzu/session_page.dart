@@ -612,6 +612,9 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
         _controller.clearWarning();
       });
     }
+    // Перестраиваем виджет — иначе _maybeShowWin() в build() не вызовется
+    // после победы, и диалог результата не появится.
+    setState(() {});
   }
 
   @override
