@@ -130,6 +130,7 @@ class HomePage extends StatelessWidget {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute(
+                          settings: const RouteSettings(name: gamesRouteName),
                           builder: (_) => GamesPage(settings: settings),
                         ),
                       ),
@@ -144,6 +145,7 @@ class HomePage extends StatelessWidget {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute(
+                          settings: const RouteSettings(name: gamesRouteName),
                           builder: (_) => GamesPage(
                             settings: settings,
                             purpose: GamesPurpose.network,

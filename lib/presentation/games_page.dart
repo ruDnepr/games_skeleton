@@ -8,6 +8,31 @@ import 'rules_page.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 
+/// Имя маршрута экрана [GamesPage]. Используется, чтобы после партии кнопка
+/// «В меню» возвращала именно в список игр, а не в главное меню или на экран
+/// настройки партии — см. [popToGamesList].
+const String gamesRouteName = 'games';
+
+/// Возвращает в список игр ([GamesPage]), снимая все маршруты партии, лобби
+/// и настройки. Используется кнопками «В меню»/«Выйти» во всех играх.
+///
+/// В обычной картине стека `HomePage → GamesPage → EntryPage → … → SessionPage`
+/// остановится на `GamesPage` (маршрут с именем [gamesRouteName]).
+///
+/// `route.isFirst` оставлен как страховка: в тестах партию часто открывают
+/// напрямую, без `GamesPage` в стеке, и без страховки `popUntil` попытался бы
+/// вытолкнуть последний маршрут. В боевом приложении `GamesPage` всегда есть
+/// в стеке: оба пути из `HomePage` (Играть и Сетевая игра) толкают её с
+/// именем [gamesRouteName]. Когда `popToGamesList` зовут из сетевой партии,
+/// дополнительно см. `NetworkPage._openSession`: там проверяется, что лобби
+/// ещё в стеке, прежде чем звать `maybePop`, — иначе `maybePop` вытолкнул бы
+/// саму `GamesPage` следом.
+void popToGamesList(BuildContext context) {
+  Navigator.of(context).popUntil(
+    (route) => route.settings.name == gamesRouteName,
+  );
+}
+
 /// Why the game list was opened.
 enum GamesPurpose {
   /// «Играть» — the card starts the game on this device.
@@ -34,6 +59,14 @@ class GamesPage extends StatelessWidget {
 
   Future<void> _open(BuildContext context, GameDefinition game) async {
     if (_forNetwork) {
+      // Some games need a choice before the lobby opens — for example, the
+      // backgammon variant. The game stores the choice itself; the lobby then
+      // reads it through `game.options(settings)`.
+      final preNetwork = game.preNetwork;
+      if (preNetwork != null) {
+        await preNetwork(context, settings);
+        if (!context.mounted) return;
+      }
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => NetworkPage(settings: settings, game: game),

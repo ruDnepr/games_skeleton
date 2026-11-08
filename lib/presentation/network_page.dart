@@ -88,6 +88,12 @@ class _NetworkPageState extends State<NetworkPage> {
       ),
     );
     if (!mounted) return;
+    // Если сеанс закрыли через «В меню» (popToGamesList), то вместе с
+    // экраном партии сняли и эту страницу лобби. В таком случае maybePop
+    // вытолкнул бы следующий маршрут — саму GamesPage — и игрок очутился
+    // бы в главном меню. Проверяем, что лобби ещё на вершине стека.
+    final modalRoute = ModalRoute.of(context);
+    if (modalRoute == null || !modalRoute.isCurrent) return;
     Navigator.of(context).maybePop();
   }
 

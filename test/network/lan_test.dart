@@ -3,26 +3,26 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/catalog.dart';
-import 'package:games_for_diana/games/example/network.dart';
+import 'package:games_for_diana/games/backgammon/network.dart';
 import 'package:games_for_diana/network/network_game_service.dart';
 import 'package:games_for_diana/network/protocol.dart';
 
 import '../support/async_wait.dart';
 
-/// Two real services on the loopback address: no mDNS, no emulator, just the
-/// same transport the phones use — server, WebSocket, handshake, messages.
+/// Два настоящих сервиса на loopback: без mDNS и эмулятора — тот же транспорт,
+/// что и на телефонах (сервер, WebSocket, рукопожатие, сообщения).
 void main() {
   const lobby = LobbyConfig(
-    gameId: exampleGameId,
-    hostSide: 'host',
+    gameId: backgammonGameId,
+    hostSide: 'white',
     code: 'ABC234',
     hostName: 'Диана',
-    options: {'reminder': true, 'markers': false},
+    options: {'hints': true, 'numbers': false, 'autoRoll': false, 'variant': 'short'},
   );
   const patience = Duration(seconds: 5);
 
-  // The one thing a game gives the transport: its own check of a move.
-  final game = GameCatalog.byId(exampleGameId)!;
+  // Единственное, что игра даёт транспорту: свою проверку хода.
+  final game = GameCatalog.byId(backgammonGameId)!;
 
   Future<NetworkGameService> startHost() async {
     final host = NetworkGameService();
@@ -37,7 +37,7 @@ void main() {
     return host;
   }
 
-  /// Connects a client by `IP:port` and waits until the lobby arrives.
+  /// Подключает клиента по IP:порт и ждёт прибытия лобби.
   Future<NetworkGameService> connectClient(NetworkGameService host) async {
     final client = NetworkGameService();
     client.attachGame(gameId: game.id, checkMove: game.validateMove);
@@ -54,16 +54,13 @@ void main() {
     return client;
   }
 
-  /// Waits for the next message of [type] on [service].
-  ///
-  /// Messages wake up the stream, not the listeners of the service, so the test
-  /// waits for the event itself and only uses [waitUntil] for the state.
   Future<NetworkMessage> nextMessage(
     NetworkGameService service,
     String type,
-  ) => service.events
-      .firstWhere((message) => message.type == type)
-      .timeout(patience);
+  ) =>
+      service.events
+          .firstWhere((message) => message.type == type)
+          .timeout(patience);
 
   void closeBoth(NetworkGameService host, NetworkGameService client) {
     addTearDown(() async {
@@ -96,37 +93,58 @@ void main() {
     expect(host.isHost, isTrue);
     expect(client.isHost, isFalse);
 
-    // The lobby travels as an envelope; the game itself reads its options.
+    // Лобби едет конвертом; опции разбирает сама игра.
     final received = client.config!;
     expect(received.version, protocolVersion);
-    expect(received.gameId, exampleGameId);
-    expect(received.hostSide, 'host');
+    expect(received.gameId, backgammonGameId);
+    expect(received.hostSide, 'white');
     expect(received.code, lobby.code);
     expect(GameCatalog.byId(received.gameId), isNotNull);
-    final options = exampleParseOptions(received.options);
-    expect(options.reminder, isTrue);
-    expect(options.markers, isFalse);
+    final options = backgammonParseOptions(received.options);
+    expect(options.hints, isTrue);
+    expect(options.numbers, isFalse);
   });
 
-  test('ходы идут через send/events в обе стороны, отмена подтверждается', () async {
+  test('ходы и кости идут через send/events в обе стороны, отмена подтверждается',
+      () async {
     final host = await startHost();
     final client = await connectClient(host);
     closeBoth(host, client);
 
-    // Client → host: the transport asked the game about this move and the game
-    // let it through, so the session sees it.
+    // Клиент → хост: ход белых (хост бросил кости и прислал их, затем ход).
     final atHost = nextMessage(host, 'move');
-    client.send(const NetworkMessage('move', {'from': 'a1', 'to': 'a3'}));
+    client.send(const NetworkMessage('move', {
+      'player': 'white',
+      'dice': [3, 5],
+      'moves': [
+        {'player': 'white', 'die': 3, 'from': 23, 'to': 20},
+      ],
+    }));
     final move = await atHost;
-    expect(move.data['from'], 'a1');
-    expect(move.data['to'], 'a3');
+    expect(move.data['player'], 'white');
+    expect((move.data['dice'] as List)[0], 3);
 
-    // Host → client: the other direction works the same way.
+    // Хост → клиент: в обратную сторону работает так же.
     final atClient = nextMessage(client, 'move');
-    host.send(const NetworkMessage('move', {'from': 'b2', 'to': 'b4'}));
-    expect((await atClient).data['to'], 'b4');
+    host.send(const NetworkMessage('move', {
+      'player': 'black',
+      'dice': [6, 1],
+      'moves': [
+        {'player': 'black', 'die': 6, 'from': 18, 'to': null},
+      ],
+    }));
+    expect((await atClient).data['player'], 'black');
 
-    // Undo is a request and an answer, both sides see the exchange.
+    // Бросок костей (тип dice) тоже доходит.
+    final diceAtClient = nextMessage(client, 'dice');
+    host.send(const NetworkMessage('dice', {
+      'player': 'white',
+      'dice': [4, 2],
+    }));
+    final dice = await diceAtClient;
+    expect(dice.data['player'], 'white');
+
+    // Отмена — запрос и ответ, обе стороны видят обмен.
     final request = nextMessage(host, 'undoRequest');
     client.send(const NetworkMessage('undoRequest', {'ply': 1}));
     expect((await request).data['ply'], 1);
@@ -136,7 +154,7 @@ void main() {
     expect((await answer).data['accepted'], isTrue);
   });
 
-  test('невозможный ход не доходит до партии: связь рвётся с причиной', () async {
+  test('негодный ход не доходит до партии: связь рвётся с причиной', () async {
     final host = await startHost();
     final client = await connectClient(host);
     closeBoth(host, client);
@@ -145,23 +163,24 @@ void main() {
     final subscription = host.events.listen(seenByHost.add);
     addTearDown(subscription.cancel);
 
-    // «z9» лежит вне доски, поэтому игра такой ход не принимает.
+    // Кость 7 не бывает — игра такой ход не принимает (проверка формата).
     final refusal = nextMessage(client, 'error');
-    client.send(const NetworkMessage('move', {'from': 'a1', 'to': 'z9'}));
+    client.send(const NetworkMessage('move', {
+      'player': 'white',
+      'dice': [7, 1],
+      'moves': [],
+    }));
 
     final error = await refusal.timeout(patience);
-    expect(error.data['message'], 'Ход не распознан');
+    expect(error.data['message'], 'Ход не распознан: кости');
 
-    await waitUntil(
-      host,
-      () => host.status == NetworkStatus.disconnected,
-    );
+    await waitUntil(host, () => host.status == NetworkStatus.disconnected);
     await waitUntil(
       client,
       () => client.status == NetworkStatus.disconnected,
     );
 
-    // The session never saw the move: it was stopped before the game applied it.
+    // Партия этот ход не увидела: его остановили до применения.
     expect(seenByHost.where((event) => event.type == 'move'), isEmpty);
   });
 
@@ -185,7 +204,7 @@ void main() {
       host.dispose();
     });
 
-    // A peer that pretends to speak another protocol version.
+    // Узел, который прикидывается другой версией протокола.
     final socket = await WebSocket.connect('ws://127.0.0.1:${host.port}');
     addTearDown(() => socket.close());
     final answer = Completer<NetworkMessage>();

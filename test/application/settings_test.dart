@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Settings are stored on the device and must come back after a restart.
+/// Настройки хранятся на устройстве и возвращаются после перезапуска.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -15,7 +15,7 @@ void main() {
     var notified = 0;
     settings.addListener(() => notified++);
 
-    // An empty name is the default one, and the default one is already there.
+    // Пустое имя — это имя по умолчанию, оно уже там.
     await settings.setNickname('   ');
     expect(settings.nickname, 'Диана');
     expect(notified, 0);
@@ -24,7 +24,7 @@ void main() {
     expect(settings.nickname, 'Алиса');
     expect(notified, 1);
 
-    // The same name again is silent: the field being typed into is not rebuilt.
+    // То же имя снова — тихо: поле ввода не перестраивается.
     await settings.setNickname('Алиса');
     expect(notified, 1);
 
@@ -56,42 +56,42 @@ void main() {
     addTearDown(settings.dispose);
     await settings.load();
     expect(
-      SettingsController.flagKey('example', 'reminder'),
-      'game.example.reminder',
+      SettingsController.flagKey('backgammon', 'hints'),
+      'game.backgammon.hints',
     );
 
-    // The defaults are the ones the games declared.
-    expect(settings.flag('example', 'reminder'), isTrue);
-    expect(settings.flag('example', 'markers'), isFalse);
-    // An unknown game or key must not throw.
+    // Значения по умолчанию — те, что объявила игра.
+    expect(settings.flag('backgammon', 'hints'), isTrue);
+    expect(settings.flag('backgammon', 'numbers'), isFalse);
+    // Неизвестная игра или ключ не бросают.
     expect(settings.flag('nope', 'nothing'), isFalse);
 
     var notified = 0;
     settings.addListener(() => notified++);
 
-    // Writing the value that is already there changes nothing.
-    await settings.setFlag('example', 'markers', false);
+    // Запись того же значения ничего не меняет.
+    await settings.setFlag('backgammon', 'numbers', false);
     expect(notified, 0);
 
-    await settings.setFlag('example', 'reminder', false);
-    await settings.setFlag('other', 'reminder', true);
+    await settings.setFlag('backgammon', 'hints', false);
+    await settings.setFlag('other', 'hints', true);
     expect(notified, 2);
 
-    expect(settings.flag('example', 'reminder'), isFalse);
-    expect(settings.flag('other', 'reminder'), isTrue);
-    expect(settings.flag('example', 'markers'), isFalse);
+    expect(settings.flag('backgammon', 'hints'), isFalse);
+    expect(settings.flag('other', 'hints'), isTrue);
+    expect(settings.flag('backgammon', 'numbers'), isFalse);
 
     final preferences = await SharedPreferences.getInstance();
-    expect(preferences.getBool('game.example.reminder'), isFalse);
-    expect(preferences.getBool('game.other.reminder'), isTrue);
+    expect(preferences.getBool('game.backgammon.hints'), isFalse);
+    expect(preferences.getBool('game.other.hints'), isTrue);
 
-    // And both come back after a restart, still separately.
+    // После перезапуска — те же значения, по-прежнему раздельно.
     final restored = SettingsController();
     addTearDown(restored.dispose);
     await restored.load();
-    expect(restored.flag('example', 'reminder'), isFalse);
-    expect(restored.flag('other', 'reminder'), isTrue);
-    expect(restored.flag('example', 'markers'), isFalse);
+    expect(restored.flag('backgammon', 'hints'), isFalse);
+    expect(restored.flag('other', 'hints'), isTrue);
+    expect(restored.flag('backgammon', 'numbers'), isFalse);
   });
 
   test('сброс прогресса обнуляет счётчики и не трогает настройки', () async {
@@ -101,12 +101,12 @@ void main() {
     await settings.setSound(false);
     await settings.recordGame(won: true);
     await settings.recordGame(won: false);
-    await settings.setFlag('example', 'markers', true);
+    await settings.setFlag('backgammon', 'numbers', true);
 
     await settings.resetProgress();
     expect(settings.gamesPlayed, 0);
     expect(settings.gamesWon, 0);
     expect(settings.sound, isFalse);
-    expect(settings.flag('example', 'markers'), isTrue);
+    expect(settings.flag('backgammon', 'numbers'), isTrue);
   });
 }

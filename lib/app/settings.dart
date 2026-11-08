@@ -20,6 +20,10 @@ class SettingsController extends ChangeNotifier {
   /// touched is not in the map and falls back to the game's default.
   final Map<String, bool> _flags = {};
 
+  /// String preferences of games (e.g. the backgammon variant). Same key shape
+  /// as the boolean flags: `game.<id>.<key>`.
+  final Map<String, String> _strings = {};
+
   /// Storage key of one switch of one game. Public, because the tests and the
   /// README use the same shape to talk about stored values.
   static String flagKey(String gameId, String key) => 'game.$gameId.$key';
@@ -63,6 +67,35 @@ class SettingsController extends ChangeNotifier {
     _flags[storageKey] = value;
     notifyListeners();
     await _preferences?.setBool(storageKey, value);
+  }
+
+  /// One string preference of one game, or [defaultValue] if it was never set.
+  /// Used for choices that are not booleans — for example, the backgammon
+  /// variant (`short` / `long`).
+  String gameString(String gameId, String key, String defaultValue) {
+    final storageKey = flagKey(gameId, key);
+    final known = _strings[storageKey];
+    if (known != null) return known;
+    final stored = _preferences?.getString(storageKey);
+    if (stored != null) {
+      _strings[storageKey] = stored;
+      return stored;
+    }
+    return defaultValue;
+  }
+
+  /// Stores one string preference of one game. Silent when the value did not
+  /// change, same as [setFlag].
+  Future<void> setGameString(
+    String gameId,
+    String key,
+    String value,
+  ) async {
+    if (gameString(gameId, key, value) == value) return;
+    final storageKey = flagKey(gameId, key);
+    _strings[storageKey] = value;
+    notifyListeners();
+    await _preferences?.setString(storageKey, value);
   }
 
   Future<void> setSound(bool value) async {

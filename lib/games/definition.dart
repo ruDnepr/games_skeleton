@@ -98,6 +98,18 @@ typedef GameMoveCheck = void Function(Map<String, Object?> move);
 /// wants to call the host's place.
 typedef GameHostSide = String Function(SettingsController settings);
 
+/// An optional step that runs before the network lobby opens, so the host
+/// can pick something the lobby cannot ask on its own — for example, the
+/// backgammon variant. The choice is stored by the game itself (usually via
+/// [SettingsController.setGameString]), and [GameOptions] reads it back when
+/// the lobby builds its handshake.
+///
+/// Return normally to proceed to the lobby; throw or return early to cancel.
+typedef GamePreNetwork = Future<void> Function(
+  BuildContext context,
+  SettingsController settings,
+);
+
 /// Everything the shared screens need to know about one game.
 ///
 /// A new game is one object of this type listed in `GameCatalog.games`; the
@@ -117,6 +129,7 @@ class GameDefinition {
     required this.parseOptions,
     required this.validateMove,
     required this.hostSide,
+    this.preNetwork,
   }) : assert(id != '', 'У игры должен быть id'),
        assert(rules.isNotEmpty, 'У игры должны быть правила: $id'),
        assert(
@@ -157,4 +170,9 @@ class GameDefinition {
 
   /// The host's place in the game, sent in the lobby.
   final GameHostSide hostSide;
+
+  /// An optional screen that runs before the network lobby, so the host can
+  /// pick a variant the lobby cannot ask about (for example, the backgammon
+  /// variant). Null for games that have nothing to choose before the lobby.
+  final GamePreNetwork? preNetwork;
 }

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "ru.dnepr.games_for_diana"
+    namespace = "ru.dnepr.diana_games"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,8 +15,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "ru.dnepr.games_for_diana"
+        // Уникальный applicationId. Прежние отдельные игры (Нарды, Го, Шашки
+        // и т.д.) тоже собирались на скелете с applicationId ru.dnepr.games_for_diana,
+        // и их debug-подпись не совпадает с CI-подписью этого APK. Уникальный id
+        // исключает конфликт «signatures do not match previously installed version».
+        applicationId = "ru.dnepr.diana_games"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -36,6 +39,13 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 code shrinking and resource shrinking disabled: the CI
+            // runner (7 GB RAM) consistently runs out of memory during the
+            // R8 pass on the combined codebase of nine games. The app is
+            // small enough without shrinking; the debug-signed release APK
+            // is not intended for Google Play anyway.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

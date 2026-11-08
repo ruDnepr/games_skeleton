@@ -4,8 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:games_for_diana/app/settings.dart';
 import 'package:games_for_diana/main.dart';
 
-/// The frame a new game plugs into: splash, main window, the list of games and
-/// the two screens of a game card.
+/// Каркас, в который встроилась игра «Нарды»: заставка, главное окно, список
+/// игр и два экрана карточки игры.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -43,7 +43,7 @@ void main() {
     expect(find.text('Время играть и улыбаться!'), findsNothing);
   });
 
-  testWidgets('«Играть» открывает список игр, карточка — игру-пример', (
+  testWidgets('«Играть» открывает список игр, карточка — выбор варианта нард', (
     tester,
   ) async {
     await pumpApp(tester);
@@ -52,18 +52,23 @@ void main() {
     await tester.tap(find.text('Играть'));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('game-card-example')), findsOneWidget);
-    expect(find.text('Игра-пример'), findsOneWidget);
+    expect(find.byKey(const Key('game-card-backgammon')), findsOneWidget);
+    expect(find.text('Нарды'), findsOneWidget);
+    // Нарды в каталоге одни: короткие и длинные — варианты внутри.
+    expect(find.byKey(const Key('game-card-long_backgammon')), findsNothing);
 
-    await tester.tap(find.byKey(const Key('game-card-example')));
+    await tester.tap(find.byKey(const Key('game-card-backgammon')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Здесь будет партия'), findsOneWidget);
-    expect(find.text('Понятно'), findsOneWidget);
+    // Сначала — выбор варианта.
+    expect(find.text('Какие нарды?'), findsOneWidget);
+    expect(find.text('Короткие нарды'), findsOneWidget);
+    expect(find.text('Длинные нарды'), findsOneWidget);
+    expect(find.byKey(const Key('backgammon-variant-next')), findsOneWidget);
 
-    await tester.tap(find.text('Понятно'));
+    await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('game-card-example')), findsOneWidget);
+    expect(find.byKey(const Key('game-card-backgammon')), findsOneWidget);
   });
 
   testWidgets('«Правила» и «Настройки» открываются из меню', (tester) async {
@@ -74,13 +79,22 @@ void main() {
     expect(find.text('Это просто!'), findsOneWidget);
     expect(find.byKey(const Key('rule-card-1')), findsOneWidget);
 
-    // The last line of the rules sits below the fold of a phone screen.
-    await tester.drag(find.byType(ListView), const Offset(0, -600));
-    await tester.pumpAndSettle();
-    expect(
-      find.text('Ошибаться и пробовать снова — это нормально! ✨'),
-      findsOneWidget,
-    );
+    // Последняя строка правил — за сгибом экрана телефона. Карточек нард
+    // десять и они длиннее, чем у заготовки, поэтому прокручиваем до неё:
+    // слепой drag не дотягивает при разной высоте контента, так что крутим
+    // пока закрывающая строка не построится.
+    final closing = find.text('Ошибаться и пробовать снова — это нормально! ✨');
+    for (var i = 0; i < 20 && find
+        .descendant(
+          of: find.byType(ListView),
+          matching: closing,
+        )
+        .evaluate()
+        .isEmpty; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await tester.pumpAndSettle();
+    }
+    expect(closing, findsOneWidget);
 
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -98,7 +112,7 @@ void main() {
     await tester.tap(find.text('Играть'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('game-rules-example')));
+    await tester.tap(find.byKey(const Key('game-rules-backgammon')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('rule-card-1')), findsOneWidget);
     expect(find.text('Это просто!'), findsOneWidget);
@@ -106,10 +120,10 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('game-settings-example')));
+    await tester.tap(find.byKey(const Key('game-settings-backgammon')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('game-flag-example-reminder')), findsOneWidget);
-    expect(find.byKey(const Key('game-flag-example-markers')), findsOneWidget);
+    expect(find.byKey(const Key('game-flag-backgammon-hints')), findsOneWidget);
+    expect(find.byKey(const Key('game-flag-backgammon-numbers')), findsOneWidget);
     expect(find.byKey(const Key('nickname-field')), findsOneWidget);
   });
 
@@ -121,13 +135,21 @@ void main() {
     await tester.tap(find.text('Сетевая игра'));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('game-card-example')), findsOneWidget);
+    expect(find.byKey(const Key('game-card-backgammon')), findsOneWidget);
     expect(
       find.text('Выбери игру, а потом создай её или подключись к другу по коду.'),
       findsOneWidget,
     );
 
-    await tester.tap(find.byKey(const Key('game-card-example')));
+    await tester.tap(find.byKey(const Key('game-card-backgammon')));
+    await tester.pumpAndSettle();
+
+    // У нард перед лобби — выбор варианта (короткие или длинные).
+    expect(find.text('Какие нарды?'), findsOneWidget);
+    expect(find.byKey(const Key('backgammon-variant-next')), findsOneWidget);
+
+    // После выбора варианта открывается лобби.
+    await tester.tap(find.byKey(const Key('backgammon-variant-next')));
     await tester.pumpAndSettle();
 
     expect(find.text('Создать игру'), findsOneWidget);

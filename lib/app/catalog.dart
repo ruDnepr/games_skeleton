@@ -1,17 +1,35 @@
+import '../games/backgammon/game.dart';
+import '../games/battleship/game.dart';
+import '../games/checkers/game.dart';
 import '../games/definition.dart';
-import '../games/example/game.dart';
+import '../games/domino/game.dart';
+import '../games/go/game.dart';
+import '../games/loto/game.dart';
+import '../games/push_hour/game.dart';
+import '../games/rendzu/game.dart';
+import '../games/ticket_to_ride/game.dart';
 
-/// The one place where the games of the app are listed.
+/// Единственное место со списком игр приложения.
 ///
-/// Everything else — the «Играть» list, the network lobby, the rules screen,
-/// the settings screen — reads this list. Adding a game means adding one entry
-/// here and nothing else.
+/// Главное окно, список игр, лобби, экраны правил и настроек читают этот
+/// список. Добавить игру — значит добавить одну строку сюда и больше нигде.
+/// Порядок карточек в меню — это порядок списка.
 class GameCatalog {
   const GameCatalog._();
 
-  static final List<GameDefinition> games = List.unmodifiable([exampleGame]);
+  static final List<GameDefinition> games = List.unmodifiable([
+    checkersGame,
+    rendzuGame,
+    goGame,
+    backgammonGame,
+    battleshipGame,
+    dominoGame,
+    lotoGame,
+    ticketToRideGame,
+    pushHourGame,
+  ]);
 
-  /// The game the «Правила» item of the main menu shows.
+  /// Игра, правила которой показывает пункт «Правила» главного меню.
   static GameDefinition get first => games.first;
 
   static GameDefinition? byId(String id) {
@@ -21,8 +39,8 @@ class GameCatalog {
     return null;
   }
 
-  /// Default value of one switch, as the game declared it. Used until the child
-  /// touches the switch for the first time.
+  /// Значение переключателя по умолчанию, как его объявила игра. Используется,
+  /// пока ребёнок не тронул переключатель.
   static bool defaultFlag(String gameId, String key) {
     final game = byId(gameId);
     if (game == null) return false;
