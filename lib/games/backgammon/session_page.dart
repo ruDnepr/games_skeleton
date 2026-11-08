@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'backgammon_controller.dart';
@@ -578,7 +579,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
         );
       } else {
         // В меню/лобби: сетевой рематч требует новой комнаты.
-        Navigator.of(context).maybePop();
+        popToGamesList(context);
       }
     });
   }
@@ -588,7 +589,10 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
     _maybeShowWin();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Нарды для Дианы'),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: const Text('Нарды для Дианы'),
+        ),
         actions: [
           // Звук можно выключить прямо в игре — как в шашках.
           ListenableBuilder(
@@ -616,7 +620,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
           IconButton(
             icon: const Icon(Icons.home_rounded),
             tooltip: 'В меню',
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () => popToGamesList(context),
           ),
           const SizedBox(width: 4),
         ],
@@ -752,33 +756,45 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
 
   /// Полоса статуса: показывает «Твой ход — брось кости!», «У тебя шашка на
   /// баре» и т.д. — то, что раньше ребёнок не видел и потому «не мог походить».
-  /// Если статуса нет — полоса схлопывается, лишнего места не занимает.
+  /// Высота зафиксирована: пустой текст не сдвигает доску — поле остаётся
+  /// статичным на протяжении всей партии.
   Widget _statusStrip() => ListenableBuilder(
     listenable: _controller,
     builder: (context, _) {
       final text = _controller.effectiveStatus;
-      if (text == null || text.isEmpty) return const SizedBox(height: 0);
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF3D6),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFE9C77B), width: 1.5),
-          ),
-          // maxLines: 2 — чтобы длинный текст на узком экране не выдавливал
-          // доску. Если совсем не влезает — обрезаем многоточием.
-          child: Text(
-            text,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w900,
-              color: Color(0xFF6A4A1A),
+      final hasText = text != null && text.isNotEmpty;
+      return SizedBox(
+        height: 36,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+          child: Visibility(
+            visible: hasText,
+            maintainSize: true,
+            maintainAnimation: true,
+            maintainState: true,
+            child: Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3D6),
+                borderRadius: BorderRadius.circular(14),
+                border:
+                    Border.all(color: const Color(0xFFE9C77B), width: 1.5),
+              ),
+              // maxLines: 2 — чтобы длинный текст на узком экране не выдавливал
+              // доску. Если совсем не влезает — обрезаем многоточием.
+              child: Text(
+                text ?? '',
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF6A4A1A),
+                ),
+              ),
             ),
           ),
         ),

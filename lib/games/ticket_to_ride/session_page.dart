@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' hide Route;
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'engine/ai.dart';
@@ -462,7 +463,7 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
           ),
         );
       } else if (choice == _OverChoice.home || widget.network != null) {
-        Navigator.of(context).maybePop();
+        popToGamesList(context);
       }
     });
   }
@@ -482,7 +483,9 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
         DianaDialogButton<void>(label: 'В меню', value: null, primary: true),
       ],
     ).then((_) {
-      if (mounted) Navigator.of(context).maybePop();
+      if (mounted) {
+        popToGamesList(context);
+      }
     });
   }
 
@@ -513,7 +516,10 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
     _maybeShowOver();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Билет на поезд'),
+        title: const FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text('Билет на поезд'),
+        ),
         actions: [
           ListenableBuilder(
             listenable: widget.settings,
@@ -540,7 +546,7 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
           IconButton(
             icon: const Icon(Icons.home_rounded),
             tooltip: 'В меню',
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () => popToGamesList(context),
           ),
           const SizedBox(width: 4),
         ],
@@ -675,12 +681,18 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
                     ),
                   ),
                 ),
-                if (notice != null && notice.isNotEmpty)
-                  FittedBox(
+                // Резервируем место под подсказку всегда — баннер хода не
+                // меняет высоту при появлении/исчезновении замечания.
+                Visibility(
+                  visible: notice != null && notice.isNotEmpty,
+                  maintainSize: true,
+                  maintainAnimation: true,
+                  maintainState: true,
+                  child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      notice,
+                      notice ?? '',
                       maxLines: 1,
                       style: TextStyle(
                         fontSize: 11,
@@ -691,6 +703,7 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
                       ),
                     ),
                   ),
+                ),
               ],
             ),
           ),
@@ -918,27 +931,28 @@ class _TicketToRideSessionPageState extends State<TicketToRideSessionPage> {
 
   Widget _destinationsRow() {
     final dests = _controller.myDestinations;
-    if (dests.isEmpty) {
-      return const SizedBox(height: 0);
-    }
+    // Высота строки путешествий зафиксирована: даже когда путешествий ещё нет,
+    // место под них зарезервировано — карта не «прыгает» при их появлении.
     return SizedBox(
       height: 56,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          for (final dest in dests)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: _DestinationChip(
-                destination: dest,
-                completed: _controller.isDestinationCompleted(
-                  _controller.mySeat,
-                  dest,
-                ),
-              ),
+      child: dests.isEmpty
+          ? const SizedBox.shrink()
+          : ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final dest in dests)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _DestinationChip(
+                      destination: dest,
+                      completed: _controller.isDestinationCompleted(
+                        _controller.mySeat,
+                        dest,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-        ],
-      ),
     );
   }
 

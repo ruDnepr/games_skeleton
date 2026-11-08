@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import 'board_game.dart';
 import 'engine/model.dart';
@@ -92,31 +93,12 @@ class _GoGamePageState extends State<GoGamePage> {
                         ),
                       ),
                     ),
-                    if (_controller.notice != null)
-                      _Bubble(
-                        text: _controller.notice!,
-                        onClose: _controller.clearNotice,
-                        color: const Color(0xFFFFF4D6),
-                      ),
-                    if (_controller.hintText != null)
-                      _Bubble(
-                        text: _controller.hintText!,
-                        onClose: _controller.clearHint,
-                        color: const Color(0xFFE3F2DE),
-                      ),
-                    if (_controller.incomingUndoPly != null)
-                      _UndoRequest(controller: _controller),
-                    if (_controller.waitingForUndo)
-                      const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: Text(
-                          'Ждём ответа на запрос отмены хода…',
-                          style: TextStyle(
-                            color: muted,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
+                    // Слот под сообщения под доской зарезервирован всегда —
+                    // даже когда ничего нет. Поле остаётся статичным, не «прыгает»
+                    // при появлении/исчезновении пузыря. Показываем только одно
+                    // сообщение по приоритету: запрос отмены > ожидание ответа
+                    // > замечание > подсказка.
+                    _NoticeSlot(controller: _controller),
                     _ActionBar(controller: _controller),
                     const SizedBox(height: 6),
                   ],
@@ -151,7 +133,7 @@ class _GoGamePageState extends State<GoGamePage> {
     );
     if (!mounted) return;
     if (go == true) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      popToGamesList(context);
     }
   }
 }
@@ -277,42 +259,50 @@ class _ActionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final thinking = controller.computerThinking || controller.hintThinking;
+    final chips = <Widget>[
+      if (controller.setup.appMode == AppGameMode.local ||
+          controller.setup.appMode == AppGameMode.network)
+        _ActionChip(
+          icon: Icons.undo_rounded,
+          label: 'Отменить',
+          enabled: controller.canUndo,
+          onTap: controller.undo,
+        ),
+      if (controller.hintButton)
+        _ActionChip(
+          icon: Icons.lightbulb_rounded,
+          label: controller.hintThinking ? 'Думаю…' : 'Подсказка',
+          enabled:
+              controller.canInteract && !thinking && controller.hints,
+          onTap: controller.showHint,
+        ),
+      _ActionChip(
+        icon: Icons.block_rounded,
+        label: 'Пас',
+        enabled: controller.canPass,
+        onTap: controller.pass,
+      ),
+      _ActionChip(
+        icon: Icons.flag_rounded,
+        label: 'Сдаться',
+        enabled: !controller.isOver && controller.fatalMessage == null,
+        onTap: () => _confirmResign(context),
+        tone: _ChipTone.danger,
+      ),
+    ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        spacing: 8,
-        runSpacing: 6,
+      child: Row(
         children: [
-          if (controller.setup.appMode == AppGameMode.local ||
-              controller.setup.appMode == AppGameMode.network)
-            _ActionChip(
-              icon: Icons.undo_rounded,
-              label: 'Отменить',
-              enabled: controller.canUndo,
-              onTap: controller.undo,
+          for (var i = 0; i < chips.length; i++) ...[
+            Expanded(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: chips[i],
+              ),
             ),
-          if (controller.hintButton)
-            _ActionChip(
-              icon: Icons.lightbulb_rounded,
-              label: controller.hintThinking ? 'Думаю…' : 'Подсказка',
-              enabled:
-                  controller.canInteract && !thinking && controller.hints,
-              onTap: controller.showHint,
-            ),
-          _ActionChip(
-            icon: Icons.block_rounded,
-            label: 'Пас',
-            enabled: controller.canPass,
-            onTap: controller.pass,
-          ),
-          _ActionChip(
-            icon: Icons.flag_rounded,
-            label: 'Сдаться',
-            enabled: !controller.isOver && controller.fatalMessage == null,
-            onTap: () => _confirmResign(context),
-            tone: _ChipTone.danger,
-          ),
+            if (i < chips.length - 1) const SizedBox(width: 8),
+          ],
         ],
       ),
     );
@@ -414,6 +404,8 @@ class _Bubble extends StatelessWidget {
             Expanded(
               child: Text(
                 text,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: ink,
                   fontWeight: FontWeight.w700,
@@ -492,8 +484,7 @@ class _FatalView extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: () =>
-                    Navigator.of(context).popUntil((r) => r.isFirst),
+                onPressed: () => popToGamesList(context),
                 icon: const Icon(Icons.home_rounded),
                 label: const Text('В меню'),
               ),
@@ -501,4 +492,51 @@ class _FatalView extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Фиксированный по высоте слот под сообщения под доской: замечание о тапе,
+/// подсказка, запрос отмены хода или ожидание ответа. Слот всегда одного
+/// размера — поле над ним не «прыгает» при появлении/исчезновении сообщения.
+/// Показывается только одно сообщение по приоритету:
+/// запрос отмены → ожидание ответа → замечание → подсказка.
+class _NoticeSlot extends StatelessWidget {
+  const _NoticeSlot({required this.controller});
+  final GoController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget? child;
+    if (controller.incomingUndoPly != null) {
+      child = _UndoRequest(controller: controller);
+    } else if (controller.waitingForUndo) {
+      child = const Padding(
+        padding: EdgeInsets.all(8),
+        child: Text(
+          'Ждём ответа на запрос отмены хода…',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: muted,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+    } else if (controller.notice != null) {
+      child = _Bubble(
+        text: controller.notice!,
+        onClose: controller.clearNotice,
+        color: const Color(0xFFFFF4D6),
+      );
+    } else if (controller.hintText != null) {
+      child = _Bubble(
+        text: controller.hintText!,
+        onClose: controller.clearHint,
+        color: const Color(0xFFE3F2DE),
+      );
+    }
+    return SizedBox(
+      height: 56,
+      child: child ?? const SizedBox.shrink(),
+    );
+  }
 }

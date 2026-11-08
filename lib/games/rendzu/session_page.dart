@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'engine/model.dart';
@@ -728,7 +729,7 @@ class _RendzuSessionPageState extends State<RendzuSessionPage> {
         setState(() => _winShown = false);
         _controller.undo();
       case _ResultChoice.home:
-        Navigator.of(context).maybePop();
+        popToGamesList(context);
       case null:
         break;
     }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import 'board_game.dart';
 import 'engine/model.dart';
@@ -74,8 +75,7 @@ class GoScoreScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: () =>
-                Navigator.of(context).popUntil((r) => r.isFirst),
+            onPressed: () => popToGamesList(context),
             icon: const Icon(Icons.home_rounded),
             label: const Text('В меню'),
             style: OutlinedButton.styleFrom(

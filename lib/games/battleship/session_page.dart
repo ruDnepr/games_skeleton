@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' hide Orientation;
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
 import '../../network/protocol.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'battleship_controller.dart';
@@ -223,7 +224,9 @@ class _BattleshipSetupPageState extends State<BattleshipSetupPage> {
         DianaDialogButton<void>(label: 'В меню', value: null, primary: true),
       ],
     ).then((_) {
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+      if (mounted) {
+        popToGamesList(context);
+      }
     });
   }
 
@@ -720,7 +723,10 @@ class _BattleshipGamePageState extends State<BattleshipGamePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_title()),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(_title()),
+        ),
         actions: [
           ListenableBuilder(
             listenable: Listenable.merge([widget.settings, controller]),
@@ -912,14 +918,17 @@ class _BattleshipGamePageState extends State<BattleshipGamePage> {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                text,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 13,
-                  color: ink,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                    color: ink,
+                  ),
                 ),
               ),
             ),
@@ -1333,7 +1342,7 @@ class BattleshipResultPage extends StatelessWidget {
   void _again(BuildContext context) {
     if (setup.mode == GameMode.network) {
       // Сетевую партию проще начать через лобби заново.
-      Navigator.of(context).popUntil((r) => r.isFirst);
+      popToGamesList(context);
       return;
     }
     Navigator.of(context).pushReplacement(
@@ -1348,7 +1357,7 @@ class BattleshipResultPage extends StatelessWidget {
   }
 
   void _toMenu(BuildContext context) {
-    Navigator.of(context).popUntil((r) => r.isFirst);
+    popToGamesList(context);
   }
 }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'car_painter.dart';
@@ -426,10 +427,10 @@ class _PushHourSessionPageState extends State<PushHourSessionPage> {
       if (_controller.hasNextLevel) {
         _controller.goToNextLevel();
       } else {
-        Navigator.of(context).maybePop();
+        popToGamesList(context);
       }
     } else {
-      Navigator.of(context).maybePop();
+      popToGamesList(context);
     }
   }
 
@@ -457,7 +458,9 @@ class _PushHourSessionPageState extends State<PushHourSessionPage> {
       ],
     );
     if (!mounted) return;
-    if (answer != 'continue') Navigator.of(context).maybePop();
+    if (answer != 'continue') {
+      popToGamesList(context);
+    }
   }
 
   static String _pluralMoves(int moves) {
@@ -488,7 +491,10 @@ class _PushHourSessionPageState extends State<PushHourSessionPage> {
     listenable: _controller,
     builder: (context, _) => Scaffold(
       appBar: AppBar(
-        title: Text(_controller.level.title),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(_controller.level.title),
+        ),
         actions: [
           IconButton(
             key: const Key('session-hint'),

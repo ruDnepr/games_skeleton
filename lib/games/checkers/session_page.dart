@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'checkers_controller.dart';
@@ -725,7 +726,7 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
   void _goHome() {
     if (exiting || !mounted) return;
     exiting = true;
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    popToGamesList(context);
   }
 
   Future<void> _playAgain() async {
@@ -736,7 +737,7 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
     final settings = widget.settings;
     final difficulty = widget.difficulty;
     exiting = true;
-    navigator.popUntil((route) => route.isFirst);
+    popToGamesList(context);
     if (mode == GameMode.network) {
       // Сетевой рематч требует новой комнаты — вернёмся в меню.
       return;
@@ -1156,6 +1157,8 @@ class _CheckersSessionPageState extends State<CheckersSessionPage>
                       Text(
                         '${side.label} · '
                         '${controller.state.board.count(side)} шашек',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 11,
                           color: muted,

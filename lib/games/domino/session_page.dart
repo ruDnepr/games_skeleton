@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'domino_controller.dart';
@@ -414,14 +415,14 @@ class _DominoSessionPageState extends State<DominoSessionPage> {
   void _goHome() {
     if (_exiting || !mounted) return;
     _exiting = true;
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    popToGamesList(context);
   }
 
   Future<void> _playAgain() async {
     if (!mounted) return;
     final navigator = Navigator.of(context);
     _exiting = true;
-    navigator.popUntil((route) => route.isFirst);
+    popToGamesList(context);
     if (_controller.mode == DominoMode.network) {
       // Сетевой рематч требует нового лобби: возвращаемся в меню.
       return;

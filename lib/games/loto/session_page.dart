@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/settings.dart';
 import '../../app/sounds.dart';
+import '../../presentation/games_page.dart' show popToGamesList;
 import '../../presentation/theme.dart';
 import '../definition.dart';
 import 'engine/model.dart';
@@ -361,10 +362,10 @@ class _LotoSessionPageState extends State<LotoSessionPage> {
       if (leave != true || !mounted) return;
       await widget.network!.service.close();
       if (!mounted) return;
-      Navigator.of(context).maybePop();
+      popToGamesList(context);
       return;
     }
-    Navigator.of(context).maybePop();
+    popToGamesList(context);
   }
 
   void _confirmResign() {
@@ -387,6 +388,59 @@ class _LotoSessionPageState extends State<LotoSessionPage> {
     ).then((resign) {
       if (resign == true) _controller.resign();
     });
+  }
+
+  /// Кнопки действий под карточкой. Кнопок всегда не больше четырёх, поэтому
+  /// используем [Row] с [Expanded] + [FittedBox] — текст ужмётся, но не
+  /// перенесётся и не вытолкнет соседние кнопки.
+  Widget _actions() {
+    final pills = <Widget>[
+      if (_controller.canDrawManually)
+        ActionPill(
+          key: const Key('draw-barrel'),
+          label: 'Вытянуть бочонок',
+          icon: Icons.casino_rounded,
+          onPressed: _controller.drawBarrel,
+        ),
+      if (_controller.hintButtonEnabled)
+        ActionPill(
+          key: const Key('hint-button'),
+          label: 'Подсказка',
+          icon: Icons.lightbulb_outline_rounded,
+          color: deepPurple,
+          filled: false,
+          onPressed: _controller.canInteract
+              ? _controller.toggleHint
+              : null,
+        ),
+      if (_controller.canUndo)
+        ActionPill(
+          key: const Key('undo-button'),
+          label: 'Отменить ход',
+          icon: Icons.undo_rounded,
+          color: deepPurple,
+          filled: false,
+          onPressed: _controller.undo,
+        ),
+      if (_controller.canResign)
+        ActionPill(
+          key: const Key('resign-button'),
+          label: 'Сдаться',
+          icon: Icons.flag_outlined,
+          color: deepPurple,
+          filled: false,
+          onPressed: _confirmResign,
+        ),
+    ];
+    if (pills.isEmpty) return const SizedBox.shrink();
+    return Row(
+      children: [
+        for (var i = 0; i < pills.length; i++) ...[
+          Expanded(child: FittedBox(fit: BoxFit.scaleDown, child: pills[i])),
+          if (i < pills.length - 1) const SizedBox(width: 8),
+        ],
+      ],
+    );
   }
 
   @override
@@ -434,48 +488,7 @@ class _LotoSessionPageState extends State<LotoSessionPage> {
                               noticeTone: _controller.noticeWarning
                                   ? NoticeTone.warning
                                   : NoticeTone.info,
-                              actions: Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  if (_controller.canDrawManually)
-                                    ActionPill(
-                                      key: const Key('draw-barrel'),
-                                      label: 'Вытянуть бочонок',
-                                      icon: Icons.casino_rounded,
-                                      onPressed: _controller.drawBarrel,
-                                    ),
-                                  if (_controller.hintButtonEnabled)
-                                    ActionPill(
-                                      key: const Key('hint-button'),
-                                      label: 'Подсказка',
-                                      icon: Icons.lightbulb_outline_rounded,
-                                      color: deepPurple,
-                                      filled: false,
-                                      onPressed: _controller.canInteract
-                                          ? _controller.toggleHint
-                                          : null,
-                                    ),
-                                  if (_controller.canUndo)
-                                    ActionPill(
-                                      key: const Key('undo-button'),
-                                      label: 'Отменить ход',
-                                      icon: Icons.undo_rounded,
-                                      color: deepPurple,
-                                      filled: false,
-                                      onPressed: _controller.undo,
-                                    ),
-                                  if (_controller.canResign)
-                                    ActionPill(
-                                      key: const Key('resign-button'),
-                                      label: 'Сдаться',
-                                      icon: Icons.flag_outlined,
-                                      color: deepPurple,
-                                      filled: false,
-                                      onPressed: _confirmResign,
-                                    ),
-                                ],
-                              ),
+                              actions: _actions(),
                             ),
                           ),
                         ],
@@ -490,7 +503,7 @@ class _LotoSessionPageState extends State<LotoSessionPage> {
                           onAgain: () {
                             if (widget.network != null &&
                                 !_controller.isHost) {
-                              Navigator.of(context).maybePop();
+                              popToGamesList(context);
                             } else {
                               _controller.playAgain();
                             }
