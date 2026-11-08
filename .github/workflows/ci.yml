@@ -47,6 +47,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
+            ~/.gradle/wrapper/dists
             ~/.m2/repository
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/pubspec.yaml') }}
           restore-keys: |
@@ -60,6 +61,23 @@ jobs:
 
       - name: Установить зависимости
         run: flutter pub get
+
+      - name: Предзагрузить Gradle (с retry от 504)
+        shell: bash
+        continue-on-error: true
+        run: |
+          # GitHub регулярно отдаёт 504 при скачивании gradle/kotlin с релизов.
+          # Прогреваем кэш wrapper'а с повторами — если один прогон не смог,
+          # следующий возьмёт из кэша.
+          for i in 1 2 3 4 5; do
+            if flutter build apk --debug > /tmp/gradle-warmup.txt 2>&1; then
+              echo "Gradle скачался с попытки $i"
+              break
+            fi
+            echo "Попытка $i не удалась, retry через 15с..."
+            grep -E "504|Could not|FAILURE" /tmp/gradle-warmup.txt | head -3
+            sleep 15
+          done
 
       - name: Анализ кода
         shell: bash
