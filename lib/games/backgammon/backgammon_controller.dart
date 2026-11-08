@@ -157,10 +157,13 @@ class BackgammonController extends ChangeNotifier {
   Player get currentTurn => state.turn;
 
   /// Доступные пункты-адресаты для выбранной шашки (для подсветки).
+  ///
+  /// Не зависит от переключателя «Подсказки»: если шашка уже выбрана, ребёнок
+  /// должен видеть, куда ей можно походить, иначе он не сможет закончить ход
+  /// и игра будет казаться «застрявшей». Подсказки до выбора шашки (
+  /// [movablePoints]) — отдельная, отключаемая функция.
   Set<int> get highlightedDestinations {
-    if (!hintsEnabled) return const {};
     if (_selectedPoint == null && !_selectedBar) {
-      // Ничего не выбрано — подсветим шашки, которыми вообще можно ходить.
       return const {};
     }
     final dests = <int>{};
@@ -171,7 +174,9 @@ class BackgammonController extends ChangeNotifier {
   }
 
   /// Шашки, которыми можно начать ход (для лёгкой подсветки, когда ничего не
-  /// выбрано).
+  /// выбрано). Показываются только при включённых подсказках — иначе ребёнок
+  /// сам ищет ход. А вот подсветка адресатов после выбора шашки работает всегда
+  /// (см. [highlightedDestinations]).
   Set<int> get movablePoints {
     if (!hintsEnabled) return const {};
     if (_selectedPoint != null || _selectedBar) return const {};
@@ -181,6 +186,36 @@ class BackgammonController extends ChangeNotifier {
     }
     return points;
   }
+
+  /// Подсказка-статус для панели: что ребёнку делать прямо сейчас. Сюда
+  /// вынесена логика «шашка на баре» и «надо бросить кости», чтобы интерфейс
+  /// показывал её одним текстом и не дублировал условия. Приоритет — бар
+  /// выше «брось кости»: если шашка на баре, ребёнку важнее это знать.
+  String? get effectiveStatus {
+    if (phase != GamePhase.playing) return status;
+    if (_isMyTurn && state.board.hasBar(state.turn)) {
+      if (state.rolled.isEmpty) {
+        return 'У тебя шашка на баре. Брось кости и введи её в игру.';
+      }
+      if (_selectedBar) {
+        return 'У тебя шашка на баре — тапни по подсвеченному пункту входа.';
+      }
+      return 'У тебя шашка на баре — тапни по средней полосе (бару).';
+    }
+    if (state.rolled.isEmpty && _isMyTurn && mode != GameMode.network) {
+      return 'Твой ход — брось кости!';
+    }
+    return status;
+  }
+
+  /// true, когда надо позвать ребёнка бросить кости: ход человека, кости ещё
+  /// не брошены, режим не сетевой (там кости бросает хост).
+  bool get needsRollPrompt =>
+      phase == GamePhase.playing &&
+      _isMyTurn &&
+      state.rolled.isEmpty &&
+      state.available.isEmpty &&
+      mode != GameMode.network;
 
   bool get canSelectBar =>
       state.board.hasBar(state.turn) && state.turn == _myTurn();
@@ -333,6 +368,16 @@ class BackgammonController extends ChangeNotifier {
     }
     if (mode == GameMode.ai && state.turn != humanColor) {
       _scheduleAiTurn();
+      return;
+    }
+    // Помогаем ребёнку: если у него шашка на баре, автоматически выбираем бар,
+    // чтобы ему осталось только тапнуть по пункту входа. Иначе тап по доске
+    // ничего не делает (с бара надо ходить первым), и игра кажется «застрявшей»
+    // — ровно тот баг, про который жаловались: «не могу походить, только после
+    // Подсказки». Подсказка делает то же самое — выбирает бар; теперь это
+    // происходит само.
+    if (_isMyTurn && state.board.hasBar(state.turn)) {
+      _selectSource(bar: true);
     }
   }
 
@@ -349,6 +394,10 @@ class BackgammonController extends ChangeNotifier {
     // Иначе выбираем шашку на этом пункте.
     if (state.board.hasBar(state.turn)) {
       // С бара ходят только входом — выбор пункта-источника запрещён.
+      // Бар при этом уже выбран автоматически в _afterRoll (см. ниже), так
+      // что ребёнку остаётся тапнуть по подсвеченному пункту входа. Тап по
+      // другому пункту сбрасывает выбор — это проверяется тестом и сохраняет
+      // «нельзя ходить не с бара».
       _resetSelection();
       notifyListeners();
       return;
@@ -439,7 +488,19 @@ class BackgammonController extends ChangeNotifier {
     _playedThisTurn.add(move);
     _resetSelection();
     sounds.play(GameSound.move);
-    if (wasHit) sounds.play(GameSound.capture);
+    if (wasHit) {
+      sounds.play(GameSound.capture);
+      // Сообщаем, чью шашку выбили. Иначе шашка «неожиданно» оказывается на
+      // баре — ровно жалоба «иногда шашка попадает на среднюю полосу».
+      final hitPlayer = state.turn.other;
+      if (mode == GameMode.local) {
+        status = 'Шашка выбита — она на баре!';
+      } else if (hitPlayer == humanColor) {
+        status = 'Твою шашку выбили — она на баре!';
+      } else {
+        status = 'Шашка соперника выбита — она на баре!';
+      }
+    }
     if (wasBearOff) sounds.play(GameSound.crown);
     notifyListeners();
     if (state.winner != null) {
@@ -507,7 +568,16 @@ class BackgammonController extends ChangeNotifier {
     final ended = BackgammonRules.endTurn(state);
     state = ended;
     _resetSelection();
-    status = null;
+    // Если ход перешёл к человеку и у него шашка на баре — сразу говорим об
+    // этом, чтобы он не тёрся по доске в поисках хода. Иначе status чистый.
+    if (phase == GamePhase.playing &&
+        state.board.hasBar(state.turn) &&
+        (mode == GameMode.local ||
+            (mode == GameMode.ai && state.turn == humanColor))) {
+      status = 'У тебя шашка на баре — введи её в игру костью.';
+    } else {
+      status = null;
+    }
     notifyListeners();
 
     if (mode == GameMode.network) {
@@ -770,6 +840,15 @@ class BackgammonController extends ChangeNotifier {
       final turn = parseTurn(data);
       state = BackgammonRules.applyTurn(state, turn);
       _resetSelection();
+      // Если ход перешёл к нам и у нас шашка на баре — сообщаем, чтобы было
+      // понятно, почему тап по доске «не работает» (надо вводить шашку с бара).
+      if (phase == GamePhase.playing &&
+          state.board.hasBar(state.turn) &&
+          _isMyTurn) {
+        status = 'У тебя шашка на баре — введи её в игру костью.';
+      } else {
+        status = null;
+      }
       notifyListeners();
       if (state.winner != null) {
         _onWin(state.winner!);

@@ -57,6 +57,11 @@ class BoardComponent extends PositionComponent with TapCallbacks {
   Board? _rendered;
   // Летающая шашка для анимации одиночного хода.
   _Flyer? _flyer;
+  // Вторая летающая шашка — выбитая. Когда ход выбивает одиночную чужую
+  // шашку, она летит на бар параллельно с ходящей. Без этой анимации шашка
+  // «неожиданно» оказывается на баре, и ребёнок не понимает, что произошло
+  // (жалоба «иногда шашка попадает на среднюю полосу»).
+  _Flyer? _hitFlyer;
 
   @override
   void onGameResize(Vector2 size) {
@@ -96,10 +101,17 @@ class BoardComponent extends PositionComponent with TapCallbacks {
       _flyer!.t += dt / 0.28; // ~280 мс на перелёт
       if (_flyer!.t >= 1) _flyer = null;
     }
+    if (_hitFlyer != null) {
+      _hitFlyer!.t += dt / 0.28;
+      if (_hitFlyer!.t >= 1) _hitFlyer = null;
+    }
   }
 
   void _maybeStartFlight(Board? old, Board now) {
     if (old == null || _geo == null) return;
+    // Каждый новый ход начинается заново — гасим старые анимации, иначе
+    // «летающая» шашка от прошлого хода может остаться на экране.
+    _hitFlyer = null;
     try {
       final diff = _singleMoveDiff(old, now);
       if (diff == null) return; // несколько изменений — без анимации
@@ -113,6 +125,27 @@ class BoardComponent extends PositionComponent with TapCallbacks {
         hideDestTop: diff.hideDestTop,
         dest: diff.to,
       );
+      // Анимация выбитой шашки: летит с пункта [hitFrom] на бар. Только при
+      // одиночном изменении — для составных ходов (сеть) не анимируется.
+      final hitFrom = diff.hitFrom;
+      final hitPlayer = diff.hitPlayer;
+      if (hitFrom != null && hitPlayer != null) {
+        // isSource: false даёт индекс count-1 = верхняя шашка стека. На старом
+        // поле это и есть выбитая шашка (она там одна — иначе бы выбивания не
+        // было). На новом баре — верхняя, куда она пришла.
+        final hfFrom = _slotCenter(old, hitPlayer, _Slot.point(hitFrom),
+            isSource: false);
+        final hfTo = _slotCenter(now, hitPlayer, const _Slot.bar(),
+            isSource: false);
+        _hitFlyer = _Flyer(
+          player: hitPlayer,
+          from: hfFrom,
+          to: hfTo,
+          t: 0,
+          hideDestTop: false,
+          dest: const _Slot.bar(),
+        );
+      }
     } catch (_) {
       // Любая неоднозначность — просто показываем новую позицию.
     }
@@ -142,17 +175,55 @@ class BoardComponent extends PositionComponent with TapCallbacks {
 
   /// Находит ровно одно перемещение шашки между [old] и [now]. Если изменений
   /// несколько (ход по сети применяется целиком) — возвращает null.
+  ///
+  /// Выбивание одиночной чужой шашки — это ТОЖЕ одиночное изменение с точки
+  /// зрения ходящего: его шашка ушла с A и пришла на B. Побочный эффект —
+  /// чужая шашка ушла с B на бар — мы фиксируем отдельно в [hitFrom]/
+  /// [hitPlayer], чтобы пустить для неё вторую анимацию. Без этого выбитая
+  /// шашка «неожиданно» появлялась на баре, и ребёнок не понимал, откуда она
+  /// (жалоба «иногда шашка попадает на среднюю полосу»).
   _MoveDiff? _singleMoveDiff(Board old, Board now) {
     _Slot? src;
     _Slot? dst;
     Player? mover;
+    int? hitFromPoint;
+    Player? hitPlayer;
+    // true, когда выбитая шашка уже пришла на бар (фиксируем, что это выбой,
+    // а не второй источник/адресат).
+    var hitToBarWhite = false;
+    var hitToBarBlack = false;
+    // Бар проверяем ДО пунктов: если шашка ушла с бара — это источник, и тогда
+    // любой уход шашки с пункта чужого цвета — выбитие, а не второй источник.
+    // Иначе бар-вход путался с обычным ходом и анимация не запускалась.
+    if (old.bar(Player.white) == now.bar(Player.white) + 1) {
+      src = const _Slot.bar();
+      mover = Player.white;
+    } else if (old.bar(Player.white) + 1 == now.bar(Player.white)) {
+      hitToBarWhite = true;
+    }
+    if (old.bar(Player.black) == now.bar(Player.black) + 1) {
+      if (src != null) return null; // оба бара уменьшились — не одиночный ход
+      src = const _Slot.bar();
+      mover = Player.black;
+    } else if (old.bar(Player.black) + 1 == now.bar(Player.black)) {
+      hitToBarBlack = true;
+    }
     for (var i = 0; i < 24; i++) {
       final ow = old.at(i, Player.white);
       final nw = now.at(i, Player.white);
       if (nw == ow - 1) {
-        if (src != null) return null;
-        src = _Slot.point(i);
-        mover = Player.white;
+        // Белая шашка ушла с пункта i.
+        if (src == null) {
+          src = _Slot.point(i);
+          mover = Player.white;
+        } else if (mover == Player.white) {
+          return null; // два источника одного цвета — не одиночный ход
+        } else {
+          // Источник уже занят чужим цветом — это выбитая шашка.
+          if (hitFromPoint != null) return null;
+          hitFromPoint = i;
+          hitPlayer = Player.white;
+        }
       } else if (nw == ow + 1) {
         if (dst != null) return null;
         dst = _Slot.point(i);
@@ -161,42 +232,23 @@ class BoardComponent extends PositionComponent with TapCallbacks {
       final ob = old.at(i, Player.black);
       final nb = now.at(i, Player.black);
       if (nb == ob - 1) {
-        if (src != null) return null;
-        src = _Slot.point(i);
-        mover = Player.black;
+        if (src == null) {
+          src = _Slot.point(i);
+          mover = Player.black;
+        } else if (mover == Player.black) {
+          return null;
+        } else {
+          if (hitFromPoint != null) return null;
+          hitFromPoint = i;
+          hitPlayer = Player.black;
+        }
       } else if (nb == ob + 1) {
         if (dst != null) return null;
         dst = _Slot.point(i);
         mover ??= Player.black;
       }
     }
-    // Бар и вынос.
-    if (old.bar(Player.white) != now.bar(Player.white)) {
-      if (old.bar(Player.white) == now.bar(Player.white) + 1) {
-        if (src != null) return null;
-        src = const _Slot.bar();
-        mover = Player.white;
-      } else if (old.bar(Player.white) + 1 == now.bar(Player.white)) {
-        if (dst != null) return null;
-        dst = const _Slot.bar();
-        mover ??= Player.black; // выбитие — чёрная шашка на бар
-      } else {
-        return null;
-      }
-    }
-    if (old.bar(Player.black) != now.bar(Player.black)) {
-      if (old.bar(Player.black) == now.bar(Player.black) + 1) {
-        if (src != null) return null;
-        src = const _Slot.bar();
-        mover = Player.black;
-      } else if (old.bar(Player.black) + 1 == now.bar(Player.black)) {
-        if (dst != null) return null;
-        dst = const _Slot.bar();
-        mover ??= Player.white;
-      } else {
-        return null;
-      }
-    }
+    // Вынос.
     if (old.off(Player.white) != now.off(Player.white)) {
       if (old.off(Player.white) + 1 == now.off(Player.white)) {
         if (dst != null) return null;
@@ -216,11 +268,23 @@ class BoardComponent extends PositionComponent with TapCallbacks {
       }
     }
     if (src == null || dst == null || mover == null) return null;
+    // Согласованность выбития: если зафиксировали шашку, которая ушла с пункта,
+    // она должна прийти на бар своего цвета — и наоборот.
+    if (hitFromPoint != null) {
+      final arrived = (hitPlayer == Player.white && hitToBarWhite) ||
+          (hitPlayer == Player.black && hitToBarBlack);
+      if (!arrived) return null;
+    } else if (hitToBarWhite || hitToBarBlack) {
+      // Шашка пришла на бар, но мы не нашли, откуда её выбили — не анимируем.
+      return null;
+    }
     return _MoveDiff(
       player: mover,
       from: src,
       to: dst,
       hideDestTop: dst.kind != 'off',
+      hitFrom: hitFromPoint,
+      hitPlayer: hitPlayer,
     );
   }
 
@@ -351,11 +415,19 @@ class BoardComponent extends PositionComponent with TapCallbacks {
     // Шашки на баре.
     for (final player in Player.values) {
       final count = controller.state.board.bar(player);
-      for (var k = 0; k < count && k < 5; k++) {
+      // Во время анимации выбития прячем верхнюю шашку на баре — она ещё
+      // «летит» с пункта, и если нарисовать её дважды (на баре и летающей),
+      // будет дёрганая картинка.
+      var visible = count;
+      final hf = _hitFlyer;
+      if (hf != null && hf.player == player) {
+        visible = count - 1;
+      }
+      for (var k = 0; k < visible && k < 5; k++) {
         _drawChecker(canvas, geo.barCheckerAt(player == Player.white, k), player);
       }
-      if (count > 5) {
-        _drawCount(canvas, geo.barCheckerAt(player == Player.white, 4), count);
+      if (visible > 5) {
+        _drawCount(canvas, geo.barCheckerAt(player == Player.white, 4), visible);
       }
     }
   }
@@ -417,12 +489,16 @@ class BoardComponent extends PositionComponent with TapCallbacks {
   }
 
   void _drawHighlights(Canvas canvas, BoardGeometry geo) {
-    if (!controller.hintsEnabled) return;
-    // Подсветка шашек, которыми можно ходить.
-    for (final point in controller.movablePoints) {
-      _strokePoint(canvas, geo, point, _hint);
+    // Подсветка шашек, которыми можно ходить — только при включённых подсказках:
+    // это подсказка до выбора, её можно выключить ради «честной» партии.
+    if (controller.hintsEnabled) {
+      for (final point in controller.movablePoints) {
+        _strokePoint(canvas, geo, point, _hint);
+      }
     }
-    // Выбранный пункт.
+    // Выбранный пункт и его адресаты — всегда. Без этого ребёнок, выбрав шашку,
+    // не видит, куда ей ходить, и игра кажется «застрявшей» (а при выключенных
+    // подсказках — совсем темно). Это не «подсказка», это базовая обратная связь.
     final sel = controller.selectedPoint;
     if (sel != null) _strokePoint(canvas, geo, sel, _highlight);
     if (controller.selectedBar) {
@@ -471,12 +547,20 @@ class BoardComponent extends PositionComponent with TapCallbacks {
   }
 
   void _drawFlyer(Canvas canvas, BoardGeometry geo) {
+    // Летящая шашка хода.
     final f = _flyer;
-    if (f == null) return;
-    final t = f.t.clamp(0.0, 1.0);
-    final eased = (t).toDouble();
-    final pos = Offset.lerp(f.from, f.to, eased)!;
-    _drawChecker(canvas, pos, f.player);
+    if (f != null) {
+      final t = f.t.clamp(0.0, 1.0);
+      final pos = Offset.lerp(f.from, f.to, t)!;
+      _drawChecker(canvas, pos, f.player);
+    }
+    // Летящая выбитая шашка — с пункта на бар.
+    final hf = _hitFlyer;
+    if (hf != null) {
+      final t = hf.t.clamp(0.0, 1.0);
+      final pos = Offset.lerp(hf.from, hf.to, t)!;
+      _drawChecker(canvas, pos, hf.player);
+    }
   }
 }
 
@@ -520,9 +604,15 @@ class _MoveDiff {
     required this.from,
     required this.to,
     required this.hideDestTop,
+    this.hitFrom,
+    this.hitPlayer,
   });
   final Player player;
   final _Slot from;
   final _Slot to;
   final bool hideDestTop;
+  /// Пункт, с которого выбитая шашка ушла на бар (null, если выбивания не было).
+  final int? hitFrom;
+  /// Цвет выбитой шашки.
+  final Player? hitPlayer;
 }

@@ -5,6 +5,7 @@ import '../games/definition.dart';
 import '../games/domino/game.dart';
 import '../games/go/game.dart';
 import '../games/loto/game.dart';
+import '../games/push_hour/game.dart';
 import '../games/rendzu/game.dart';
 import '../games/ticket_to_ride/game.dart';
 
@@ -25,6 +26,7 @@ class GameCatalog {
     dominoGame,
     lotoGame,
     ticketToRideGame,
+    pushHourGame,
   ]);
 
   /// Игра, правила которой показывает пункт «Правила» главного меню.

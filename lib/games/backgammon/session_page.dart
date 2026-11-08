@@ -623,47 +623,66 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
       ),
       body: AppBackground(
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 510),
-              child: ListenableBuilder(
-                listenable: _controller,
-                builder: (context, _) {
-                  // Панели зафиксированы: белые всегда сверху, чёрные всегда
-                  // снизу — как в реальных нардах. Бейдж «ХОД» показывает, чья
-                  // очередь; панели не «прыгают» при смене хода. В локальном
-                  // режиме верхняя панель повёрнута на 180°, чтобы игрок по ту
-                  // сторону стола читал имя нормально.
-                  const topSide = Player.white;
-                  const bottomSide = Player.black;
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-                    child: Column(
-                      children: [
-                        _playerPanel(topSide, top: true),
-                        const SizedBox(height: 6),
-                        _diceStrip(),
-                        const SizedBox(height: 6),
-                        Expanded(
-                          child: Center(
-                            child: AspectRatio(
-                              aspectRatio: 0.84,
-                              child: RepaintBoundary(
-                                child: GameWidget(game: _game),
+          // LayoutBuilder — для адаптива: на маленьких экранах ужимаем панели
+          // и расстояния, чтобы доска не вытеснялась кнопками. Без этого на
+          // коротких телефонах нижняя панель и кнопки налезали на доску.
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxHeight < 680 ||
+                  constraints.maxWidth < 380;
+              final tiny = constraints.maxHeight < 560 ||
+                  constraints.maxWidth < 330;
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 510),
+                  child: ListenableBuilder(
+                    listenable: _controller,
+                    builder: (context, _) {
+                      // Панели зафиксированы: белые всегда сверху, чёрные всегда
+                      // снизу — как в реальных нардах. Бейдж «ХОД» показывает, чья
+                      // очередь; панели не «прыгают» при смене хода. В локальном
+                      // режиме верхняя панель повёрнута на 180°, чтобы игрок по ту
+                      // сторону стола читал имя нормально.
+                      const topSide = Player.white;
+                      const bottomSide = Player.black;
+                      final gap = tiny ? 4.0 : (compact ? 5.0 : 6.0);
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          8,
+                          4,
+                          8,
+                          tiny ? 4 : 8,
+                        ),
+                        child: Column(
+                          children: [
+                            _playerPanel(topSide, top: true, compact: compact),
+                            SizedBox(height: gap),
+                            _statusStrip(),
+                            SizedBox(height: gap),
+                            _diceStrip(compact: compact),
+                            SizedBox(height: gap),
+                            Expanded(
+                              child: Center(
+                                child: AspectRatio(
+                                  aspectRatio: 0.84,
+                                  child: RepaintBoundary(
+                                    child: GameWidget(game: _game),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                            SizedBox(height: gap),
+                            _playerPanel(bottomSide, top: false, compact: compact),
+                            SizedBox(height: gap),
+                            _bottomBar(compact: compact),
+                          ],
                         ),
-                        const SizedBox(height: 6),
-                        _playerPanel(bottomSide, top: false),
-                        const SizedBox(height: 6),
-                        _bottomBar(),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -676,15 +695,16 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
 
   /// Панель игрока: имя, цвет, бейдж «ХОД» когда его очередь. В локальном
   /// режиме верхняя панель повёрнута — так два игрока на одном устройстве
-  /// каждый видят свою сторону.
-  Widget _playerPanel(Player side, {required bool top}) {
+  /// каждый видят свою сторону. [compact] ужимает высоту и шрифт на коротких
+  /// экранах, чтобы доска не вытеснялась панелями.
+  Widget _playerPanel(Player side, {required bool top, required bool compact}) {
     final active = _controller.currentTurn == side &&
         _controller.phase == GamePhase.playing;
     final isWhite = side == Player.white;
     final name = _controller.playerName(side);
     final panel = Container(
       key: Key(top ? 'top-player-panel' : 'bottom-player-panel'),
-      height: 52,
+      height: compact ? 44 : 52,
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
       decoration: BoxDecoration(
         color: active
@@ -698,15 +718,15 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
       ),
       child: Row(
         children: [
-          _SideDot(white: isWhite),
+          _SideDot(white: isWhite, compact: compact),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 14,
+              style: TextStyle(
+                fontSize: compact ? 13 : 14,
                 fontWeight: FontWeight.w900,
                 color: ink,
               ),
@@ -730,10 +750,47 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
     return panel;
   }
 
+  /// Полоса статуса: показывает «Твой ход — брось кости!», «У тебя шашка на
+  /// баре» и т.д. — то, что раньше ребёнок не видел и потому «не мог походить».
+  /// Если статуса нет — полоса схлопывается, лишнего места не занимает.
+  Widget _statusStrip() => ListenableBuilder(
+    listenable: _controller,
+    builder: (context, _) {
+      final text = _controller.effectiveStatus;
+      if (text == null || text.isEmpty) return const SizedBox(height: 0);
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF3D6),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE9C77B), width: 1.5),
+          ),
+          // maxLines: 2 — чтобы длинный текст на узком экране не выдавливал
+          // доску. Если совсем не влезает — обрезаем многоточием.
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF6A4A1A),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
   /// Отдельная строка для кубиков на всю ширину — дубль из четырёх кубиков
   /// помещается без труда, текст сверху не выдавливается. В ход человека
   /// кнопка броска пульсирует, чтобы ребёнок точно заметил свою очередь.
-  Widget _diceStrip() => ListenableBuilder(
+  /// [compact] ужимает высоту на коротких экранах.
+  Widget _diceStrip({required bool compact}) => ListenableBuilder(
     listenable: _controller,
     builder: (context, _) {
       final rolled = _controller.state.rolled;
@@ -743,10 +800,10 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
         child: SizedBox(
-          height: 60,
+          height: compact ? 52 : 60,
           child: Center(
             child: showRoll
-                ? _PulseRollButton(onTap: _controller.rollDice)
+                ? _PulseRollButton(onTap: _controller.rollDice, compact: compact)
                 : rolled.isEmpty
                 ? const Text(
                     '—',
@@ -763,7 +820,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
     },
   );
 
-  Widget _bottomBar() => ListenableBuilder(
+  Widget _bottomBar({required bool compact}) => ListenableBuilder(
     listenable: _controller,
     builder: (context, _) {
       return Padding(
@@ -776,6 +833,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
                 label: 'Отменить',
                 enabled: _controller.canUndo,
                 onTap: _controller.undo,
+                compact: compact,
               ),
             ),
             const SizedBox(width: 8),
@@ -788,6 +846,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
                     _controller.state.rolled.isNotEmpty &&
                     _controller.phase == GamePhase.playing,
                 onTap: _controller.hint,
+                compact: compact,
               ),
             ),
             const SizedBox(width: 8),
@@ -797,6 +856,7 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
                 label: 'Завершить',
                 enabled: _controller.canEndTurn,
                 onTap: _controller.endTurn,
+                compact: compact,
               ),
             ),
           ],
@@ -826,28 +886,32 @@ class _BackgammonSessionPageState extends State<BackgammonSessionPage> {
 
 /// Маленький кружок-индикатор цвета игрока (белый/чёрный) для панели.
 class _SideDot extends StatelessWidget {
-  const _SideDot({required this.white});
+  const _SideDot({required this.white, this.compact = false});
   final bool white;
+  final bool compact;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 30,
-    height: 30,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: white
-            ? [Colors.white, const Color(0xFFEFE3C8)]
-            : [const Color(0xFF5A4E78), const Color(0xFF221B33)],
+  Widget build(BuildContext context) {
+    final size = compact ? 26.0 : 30.0;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: white
+              ? [Colors.white, const Color(0xFFEFE3C8)]
+              : [const Color(0xFF5A4E78), const Color(0xFF221B33)],
+        ),
+        border: Border.all(
+          color: white ? const Color(0xFFC9B68C) : const Color(0xFF221B33),
+          width: 1.5,
+        ),
       ),
-      border: Border.all(
-        color: white ? const Color(0xFFC9B68C) : const Color(0xFF221B33),
-        width: 1.5,
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _CtrlButton extends StatelessWidget {
@@ -856,11 +920,13 @@ class _CtrlButton extends StatelessWidget {
     required this.label,
     required this.enabled,
     required this.onTap,
+    this.compact = false,
   });
   final IconData icon;
   final String label;
   final bool enabled;
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => Opacity(
@@ -872,19 +938,27 @@ class _CtrlButton extends StatelessWidget {
         onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          height: 54,
+          height: compact ? 46 : 54,
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: purple, size: 22),
+              Icon(icon, color: purple, size: compact ? 20 : 22),
               const SizedBox(height: 2),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: ink,
+              // FittedBox — чтобы на узких экранах подпись не обрезалась и не
+              // выпячивала иконку за пределы кнопки.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: ink,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -897,9 +971,12 @@ class _CtrlButton extends StatelessWidget {
 
 /// Большая пульсирующая кнопка «Бросить кости» — чтобы ребёнок точно заметил,
 /// что наступила его очередь. Пульсация — мягкое увеличение/уменьшение.
+/// Текст-подсказка «Твой ход — брось кости!» живёт в полосе статуса выше
+/// (`_statusStrip`), тут только сама кнопка — чтобы не дублировать.
 class _PulseRollButton extends StatefulWidget {
-  const _PulseRollButton({required this.onTap});
+  const _PulseRollButton({required this.onTap, this.compact = false});
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   State<_PulseRollButton> createState() => _PulseRollButtonState();
@@ -926,7 +1003,7 @@ class _PulseRollButtonState extends State<_PulseRollButton>
       return Transform.scale(scale: scale, child: child);
     },
     child: SizedBox(
-      height: 50,
+      height: widget.compact ? 44 : 50,
       child: FilledButton.icon(
         key: const Key('backgammon-roll'),
         onPressed: widget.onTap,
