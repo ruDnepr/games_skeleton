@@ -39,8 +39,8 @@ class BattleshipEntryPage extends StatelessWidget {
   }
 }
 
-/// Выбор режима: против компьютера (с уровнем сложности) или вдвоём на одном
-/// устройстве. Из режима «против компьютера» дальше ведёт DifficultyPage.
+/// Выбор режима: только против компьютера (как в оригинале).
+/// Сетевая игра открывается через «Сетевая игра» в главном меню.
 class BattleshipModePage extends StatelessWidget {
   const BattleshipModePage({super.key, required this.settings});
   final SettingsController settings;
@@ -54,8 +54,7 @@ class BattleshipModePage extends StatelessWidget {
             const Intro(
               eyebrow: 'ЯКОРЯ НА СТАРТ ⚓',
               title: 'С кем сыграем?',
-              subtitle: 'Против компьютера — три уровня сложности. '
-                  'Можно и вдвоём на одном устройстве.',
+              subtitle: 'Против компьютера — три уровня сложности.',
             ),
             const SizedBox(height: 22),
             BigButton(
@@ -67,23 +66,6 @@ class BattleshipModePage extends StatelessWidget {
                 MaterialPageRoute(
                   builder: (_) =>
                       BattleshipDifficultyPage(settings: settings),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            BigButton(
-              title: 'Двое на одном устройстве',
-              subtitle: 'Ходы по очереди — каждый расставляет свой флот',
-              icon: Icons.people_rounded,
-              color: const Color(0xFFF4CB67),
-              foreground: ink,
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => BattleshipSetupPage(
-                    settings: settings,
-                    mode: GameMode.local,
-                  ),
                 ),
               ),
             ),
