@@ -908,109 +908,56 @@ class _Hud extends StatelessWidget {
     final current = controller.currentColor;
     final isBlack = current == StoneColor.black;
     final isVsComputer = controller.mode == RendzuMode.ai;
-    final isNetwork = controller.mode == RendzuMode.network;
     final humanTurn = controller.canInteract;
     final moveNo = controller.moveNumber + (controller.isOver ? 0 : 1);
-    // Подпись «чей ход» — только против компьютера или по сети, как в
-    // оригинале. Вдвоём на одном устройстве достаточно номера хода.
-    String? centerLabel;
-    if (controller.busy) {
-      centerLabel = 'Думает компьютер…';
-    } else if (controller.isOver) {
-      centerLabel = 'Партия окончена';
-    } else if (isVsComputer) {
-      centerLabel = humanTurn ? 'Твой ход' : 'Думает компьютер…';
-    } else if (isNetwork) {
-      centerLabel = humanTurn ? 'Твой ход' : 'Ходит друг…';
-    }
-    final centerLabelColor = humanTurn && !controller.isOver
-        ? purple
-        : const Color(0xFFE27D60);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: Row(
         children: [
-          Expanded(
-            child: _PlayerChip(
-              color: StoneColor.black,
-              name: controller.playerName(StoneColor.black),
-              active: isBlack && !controller.isOver,
-              moveCount: moveNo,
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 104,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    'Ход $moveNo',
-                    style: const TextStyle(
+          _PlayerChip(color: StoneColor.black, active: isBlack && !controller.isOver),
+          const Spacer(),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Ход $moveNo',
+                  style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
-                      color: muted,
-                    ),
+                      color: muted)),
+              if (isVsComputer && !controller.isOver)
+                Text(
+                  humanTurn ? 'Твой ход' : 'Думает компьютер…',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: humanTurn ? purple : const Color(0xFFE27D60),
                   ),
                 ),
-                if (centerLabel != null) ...[
-                  const SizedBox(height: 2),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      centerLabel,
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: centerLabelColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _PlayerChip(
-              color: StoneColor.white,
-              name: controller.playerName(StoneColor.white),
-              active: !isBlack && !controller.isOver,
-              moveCount: moveNo,
-            ),
-          ),
+          const Spacer(),
+          _PlayerChip(color: StoneColor.white, active: !isBlack && !controller.isOver),
         ],
       ),
     );
   }
 }
 
-/// Фишка игрока: цветной кружок, имя и бейдж «ХОД».
+/// Фишка игрока: цветной кружок и подпись «Чёрные»/«Белые». Как в оригинале —
+/// без имени игрока и без бейджа «ХОД».
 class _PlayerChip extends StatelessWidget {
-  const _PlayerChip({
-    required this.color,
-    required this.name,
-    required this.active,
-    required this.moveCount,
-  });
+  const _PlayerChip({required this.color, required this.active});
   final StoneColor color;
-  final String name;
   final bool active;
-  final int moveCount;
 
   @override
   Widget build(BuildContext context) => AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: active
               ? yellow.withValues(alpha: .30)
-              : Colors.white.withValues(alpha: .85),
+              : Colors.white.withValues(alpha: .82),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: active ? yellow : const Color(0xFFE3D8F5),
@@ -1018,84 +965,32 @@ class _PlayerChip extends StatelessWidget {
           ),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            _SideDot(black: color == StoneColor.black),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: ink,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    color == StoneColor.black ? 'Чёрные' : 'Белые',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (active)
-              const Eyebrow(
-                'ХОД',
-                color: deepPurple,
-                background: Color(0xFFDCCDF8),
-                fontSize: 10,
-              )
-            else
-              Text(
-                'ход $moveCount',
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: muted,
+            Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  center: const Alignment(-0.3, -0.3),
+                  colors: color == StoneColor.black
+                      ? const [Color(0xFF5A5764), Color(0xFF1B1A22)]
+                      : const [Colors.white, Color(0xFFE2D6BE)],
                 ),
               ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              color == StoneColor.black ? 'Чёрные' : 'Белые',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w900, color: ink),
+            ),
           ],
         ),
       );
 }
 
-class _SideDot extends StatelessWidget {
-  const _SideDot({required this.black});
-  final bool black;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            center: const Alignment(-0.3, -0.3),
-            radius: 0.9,
-            colors: black
-                ? [const Color(0xFF6A6677), const Color(0xFF2A2733)]
-                : [Colors.white, const Color(0xFFFBFBF6), const Color(0xFFCEB998)],
-            stops: black ? const [0.0, 1.0] : const [0.0, 0.7, 1.0],
-          ),
-          border: Border.all(
-            color: black ? const Color(0xFF1E1B26) : const Color(0xFFC9B68C),
-            width: 1.5,
-          ),
-        ),
-      );
-}
 
 class _Controls extends StatelessWidget {
   const _Controls({
