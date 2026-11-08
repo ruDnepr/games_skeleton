@@ -67,16 +67,16 @@ jobs:
         continue-on-error: true
         run: |
           # GitHub регулярно отдаёт 504 при скачивании gradle/kotlin с релизов.
-          # Прогреваем кэш wrapper'а с повторами — если один прогон не смог,
-          # следующий возьмёт из кэша.
-          for i in 1 2 3 4 5; do
+          # Прогреваем кэш wrapper'а с 20 повторами по 30с — рано или поздно
+          # 504 проходит.
+          for i in $(seq 1 20); do
             if flutter build apk --debug > /tmp/gradle-warmup.txt 2>&1; then
               echo "Gradle скачался с попытки $i"
               break
             fi
-            echo "Попытка $i не удалась, retry через 15с..."
+            echo "Попытка $i не удалась, retry через 30с..."
             grep -E "504|Could not|FAILURE" /tmp/gradle-warmup.txt | head -3
-            sleep 15
+            sleep 30
           done
 
       - name: Анализ кода
